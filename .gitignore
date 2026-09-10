@@ -1,0 +1,28 @@
+# --- Secrets: these carry live Pexels/Pixabay/Unsplash API keys ---
+project.json
+story_plan.xlsx
+story_plan.backup-*.xlsx
+.env
+.env.*
+*.key
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# --- Generated render output & media ---
+Output/
+_selftest/
+*.mp4
+*.mov
+*.mp3
+*.wav
+*.m4a
+
+# --- OS cruft ---
+Thumbs.db
+desktop.ini
+.DS_Store

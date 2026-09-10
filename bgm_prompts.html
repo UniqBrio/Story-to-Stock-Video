@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BGM Prompt — My Academy Story</title>
+<style>
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+          background:#0f0f17; color:#e8e4dc; padding:24px; line-height:1.6; }
+  .header { background:linear-gradient(135deg,#1a1a2e,#16213e);
+             border:1px solid #DE7D14; border-radius:12px;
+             padding:24px 30px; margin-bottom:24px; }
+  .header h1 { color:#DE7D14; font-size:22px; margin-bottom:6px; }
+  .header p  { color:#888; font-size:13px; }
+  .meta-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
+                gap:12px; margin-bottom:24px; }
+  .meta-card { background:#1a1a2e; border:1px solid #2a2a40;
+                border-radius:10px; padding:14px 18px; }
+  .meta-card .label { font-size:10px; color:#888; text-transform:uppercase;
+                       letter-spacing:1px; margin-bottom:4px; }
+  .meta-card .value { font-size:15px; color:#DE7D14; font-weight:600; }
+  .section { background:#1a1a2e; border:1px solid #2a2a40;
+              border-radius:12px; padding:20px 24px; margin-bottom:20px; }
+  .section h2 { font-size:16px; color:#DE7D14; margin-bottom:14px;
+                 border-bottom:1px solid #2a2a40; padding-bottom:8px; }
+  .brief-row { display:flex; gap:12px; margin-bottom:8px; font-size:13px; }
+  .brief-label { color:#888; min-width:120px; flex-shrink:0; }
+  .brief-value { color:#e8e4dc; }
+  ul.timeline { list-style:none; margin-top:6px; }
+  ul.timeline li { font-size:13px; color:#c5b8f0; padding:4px 0;
+                    border-bottom:1px solid #1f1f30; font-family:'Courier New',mono; }
+  ul.timeline li.key-moment { color:#DE7D14; }
+  .tool-card { background:#111120; border:1px solid #2a2a40;
+                border-radius:10px; padding:18px 20px; margin-bottom:16px; }
+  .gemini-card { border-color:#4285F4; background:#0d1220; }
+  .usage-note { font-size:12px; color:#aaa; margin-bottom:10px;
+                 background:#0f0f17; border-radius:6px; padding:8px 12px;
+                 border-left:3px solid #DE7D14; line-height:1.6; }
+  .gemini-card .usage-note { border-left-color:#4285F4; }
+  .gemini-card .tool-name { color:#4285F4; }
+  .tool-header { display:flex; align-items:center; gap:12px;
+                  flex-wrap:wrap; margin-bottom:12px; }
+  .tool-name  { font-size:15px; font-weight:700; color:#DE7D14; }
+  .tool-url   { font-size:12px; color:#6708C0; text-decoration:none; }
+  .tool-url:hover { text-decoration:underline; }
+  .copy-btn   { margin-left:auto; background:#DE7D14; color:#fff; border:none;
+                 padding:6px 14px; border-radius:6px; cursor:pointer;
+                 font-size:12px; font-weight:600; }
+  .copy-btn:hover   { background:#c56d10; }
+  .copy-btn.copied  { background:#27ae60; }
+  textarea { width:100%; background:#0f0f17; border:1px solid #333;
+              border-radius:8px; color:#e8e4dc; padding:14px;
+              font-size:12px; line-height:1.6; resize:vertical; min-height:200px;
+              font-family:'Courier New',monospace; cursor:pointer; }
+  textarea:focus { outline:none; border-color:#DE7D14; }
+  .save-note { background:#0a1a0a; border:1px solid #27ae60;
+                border-radius:8px; padding:16px 20px; margin-top:20px;
+                font-size:13px; color:#c5f0c5; }
+  .save-note strong { color:#27ae60; }
+  code { background:#1e1e30; color:#DE7D14; padding:2px 6px;
+          border-radius:3px; font-size:12px; }
+  .footer { text-align:center; color:#333; font-size:11px; margin-top:28px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🎵 BGM Generation Brief</h1>
+  <p>Project: <strong>My Academy Story</strong> &nbsp;|&nbsp;
+     Generated: 05 Sep 2026 22:52</p>
+</div>
+
+<div class="meta-grid">
+  <div class="meta-card">
+    <div class="label">Video Duration</div>
+    <div class="value">19.0s</div>
+  </div>
+  <div class="meta-card">
+    <div class="label">Emotional Arc</div>
+    <div class="value">🎭 Problem → Solution Arc</div>
+  </div>
+  <div class="meta-card">
+    <div class="label">Mood Progression</div>
+    <div class="value">heavy → hopeful → triumphant</div>
+  </div>
+  <div class="meta-card">
+    <div class="label">Tempo Range</div>
+    <div class="value">80–110 BPM</div>
+  </div>
+  <div class="meta-card">
+    <div class="label">Platform</div>
+    <div class="value">Instagram Reels</div>
+  </div>
+  <div class="meta-card">
+    <div class="label">Audio Mode</div>
+    <div class="value">B + VO overlay</div>
+  </div>
+</div>
+
+<div class="section">
+  <h2>Music Brief Summary</h2>
+  <div class="brief-row"><span class="brief-label">Style</span>
+    <span class="brief-value">cinematic orchestral — begins sparse and melancholic, builds to uplifting resolution</span></div>
+  <div class="brief-row"><span class="brief-label">Instruments</span>
+    <span class="brief-value">sparse piano intro, subtle strings building, light percussion entering at pivot, full arrangement at CTA</span></div>
+  <div class="brief-row"><span class="brief-label">Cut Energy</span>
+    <span class="brief-value">medium cuts (avg 3.2s/shot) → flowing, moderate energy</span></div>
+  <div class="brief-row"><span class="brief-label">Genre Tags</span>
+    <span class="brief-value">emotional, cinematic, inspirational, building, hopeful, academy</span></div>
+</div>
+
+<div class="section">
+  <h2>Timeline Cues &nbsp;<span style="font-size:11px;color:#888;font-weight:400">
+    (⚑ = key musical moment)</span></h2>
+  <ul class="timeline"><li class="">0:00 — Begin with slow and heavy feel. Sparse, minimal, emotional weight.</li><li class="">5.0s — Sustain tension. Add subtle movement but no resolution yet.</li><li class="">8.5s — Full warm resolution. Major key arrival.</li><li class="">16s — Begin fade out over final 3 seconds</li><li class="">19s — Music ends (matched to video length)</li><li class="key-moment">⚑  Fade transition at 13.5s — consider musical breath or micro-pause</li><li class="key-moment">⚑  CTA begins at 13.0s — music should be at peak energy</li></ul>
+</div>
+
+<div class="section">
+  <h2>Copy-Paste Prompts by Tool</h2>
+  
+        <div class="tool-card gemini-card">
+          <div class="tool-header">
+            <span class="tool-name">🔵 Google Gemini (Lyria 3)</span>
+            <a href="https://gemini.google.com/app" class="tool-url" target="_blank">gemini.google.com/app ↗</a>
+            <button onclick="copyText('prompt_gemini', this)" class="copy-btn">📋 Copy Prompt</button>
+          </div>
+          <div class="usage-note">🔵 <strong>Gemini (Lyria 3):</strong> Go to <a href='https://gemini.google.com/app' target='_blank' style='color:#4285F4'>gemini.google.com/app</a> → click the <strong>🎵 Music</strong> icon at the bottom → paste this entire prompt into the <em>'Describe your track'</em> box → click generate. Download the result and save as <code>bgm.mp3</code>.</div>
+          <textarea id="prompt_gemini" readonly onclick="this.select()">Create an instrumental background music track for a Instagram Reels video. The video is 19 seconds long — the music should match this duration exactly and fade out naturally over the final 3 seconds. No lyrics, no vocals, purely instrumental. 
+
+The music begins in a place of quiet struggle — sparse, heavy, and uncertain, like someone carrying a weight they haven&#x27;t named yet. As the story unfolds, a single instrument starts to push through the heaviness — a piano note, a string phrase — suggesting that something is about to change. By the final third, the music opens up fully: warm, resolved, and forward-moving, as if the person finally found the answer they were looking for. 
+
+The instrumentation should include sparse piano intro — subtle strings building — light percussion entering at pivot — full arrangement at CTA. Tempo around 80 to 110 BPM — medium cuts (avg 3.2s/shot) → flowing, moderate energy. At around 13.5 seconds, allow a very brief musical breath — a half-beat of space — before continuing. At around 13.0 seconds, the music reaches its peak energy and stays there through to the end. 
+
+The overall mood progression is: heavy → hopeful → triumphant. Style: cinematic orchestral — begins sparse and melancholic, builds to uplifting resolution. The music should feel supportive, not dominant — it sits behind the visuals and carries the emotional weight without overpowering them. Mix at a moderate level, suitable for background use with text overlays on screen. Genre reference: emotional, cinematic, inspirational, building, hopeful, academy.</textarea>
+        </div>
+</div>
+
+<div class="save-note">
+  <strong>After generating your BGM:</strong><br>
+  1. Save the file as <code>bgm.mp3</code> (or <code>bgm.wav</code>) in your music folder<br>
+  2. Open <code>story_plan.xlsx</code> → Project Settings sheet<br>
+  3. Paste the full file path into the <code>bgm_path</code> row<br>
+  4. Set <code>bgm_volume</code> to <code>0.35</code> (BGM sits under VO — quieter than main music)<br>
+  5. Continue the pipeline — <code>audio_mixer.py</code> will layer it automatically
+</div>
+
+<div class="footer">
+  UniqBrio Story-to-Video Pipeline · bgm_prompt_generator.py
+</div>
+
+<script>
+function copyText(id, btn) {
+  const el = document.getElementById(id);
+  el.select();
+  document.execCommand('copy');
+  btn.textContent = '✅ Copied!';
+  btn.classList.add('copied');
+  setTimeout(() => {
+    btn.textContent = '📋 Copy Prompt';
+    btn.classList.remove('copied');
+  }, 2500);
+}
+</script>
+</body>
+</html>

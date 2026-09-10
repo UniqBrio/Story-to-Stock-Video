@@ -1,0 +1,59 @@
+{
+  "brief": {
+    "project_name": "My Academy Story",
+    "total_duration": 19.0,
+    "arc_type": "problem_to_solution",
+    "style": "cinematic orchestral — begins sparse and melancholic, builds to uplifting resolution",
+    "instruments": "sparse piano intro, subtle strings building, light percussion entering at pivot, full arrangement at CTA",
+    "mood_arc": "heavy → hopeful → triumphant",
+    "bpm_range": "80–110 BPM",
+    "tempo_feel": "medium cuts (avg 3.2s/shot) → flowing, moderate energy",
+    "tags": "emotional, cinematic, inspirational, building, hopeful, academy",
+    "timeline_cues": [
+      "0:00 — Begin with slow and heavy feel. Sparse, minimal, emotional weight.",
+      "5.0s — Sustain tension. Add subtle movement but no resolution yet.",
+      "8.5s — Full warm resolution. Major key arrival.",
+      "16s — Begin fade out over final 3 seconds",
+      "19s — Music ends (matched to video length)",
+      "⚑  Fade transition at 13.5s — consider musical breath or micro-pause",
+      "⚑  CTA begins at 13.0s — music should be at peak energy"
+    ],
+    "key_moments": [
+      {
+        "time": 13.5,
+        "type": "breath_moment",
+        "note": "Fade transition at 13.5s — consider musical breath or micro-pause"
+      },
+      {
+        "time": 13.0,
+        "type": "cta_moment",
+        "note": "CTA begins at 13.0s — music should be at peak energy"
+      }
+    ],
+    "platform": "Instagram Reels",
+    "audio_mode": "B + VO overlay"
+  },
+  "analysis": {
+    "total_duration": 19.0,
+    "total_shots": 6,
+    "arc_type": "problem_to_solution",
+    "dominant_setup": "chaos",
+    "dominant_rising": "chaos",
+    "dominant_resolve": "pivot",
+    "avg_shot_dur": 3.17,
+    "tempo_feel": "medium cuts (avg 3.2s/shot) → flowing, moderate energy",
+    "bpm_range": "80–110 BPM",
+    "key_moments": [
+      {
+        "time": 13.5,
+        "type": "breath_moment",
+        "note": "Fade transition at 13.5s — consider musical breath or micro-pause"
+      },
+      {
+        "time": 13.0,
+        "type": "cta_moment",
+        "note": "CTA begins at 13.0s — music should be at peak energy"
+      }
+    ]
+  }
+}
