@@ -10,7 +10,7 @@ writes Output/qa_report.md + qa_report.json + Output/qa/frame_*.jpg.
   Picture     : black frames · frozen video (outside T1/T5 cards) · thumb-stop frames at 0/1/2/3 s
   Sound       : dead air > 1.5 s
   Complete    : every planned shot is in the timeline · no shot left in error/swap
-  Fonts       : no FFmpeg-default font · Tamil text in a Tamil font · brand font used
+  Fonts       : no FFmpeg-default font · Tamil text in a Tamil font and shaped · brand font used
   Story rules : hook in ≤ 1.5 s · restraint budget (README §2) · reading-time minimums ·
                 single CTA · brand linkage (T5 card or bug) · safe zones on · license log complete
   Manual      : sound-off comprehension · phone viewing — listed as reminders, never auto-passed
@@ -31,7 +31,7 @@ from datetime import datetime
 
 from svos_common import (load_project, save_project, check_ffmpeg, run_ff, run_ff_capture,
                          probe_video_info, banner, set_log, output_dir, shot_kind, words,
-                         font_is_family, is_tamil_font)
+                         font_is_family, is_tamil_font, ffmpeg_text_shaping, find_font)
 
 CTA_RE = re.compile(r"\b(dm|comment|link|click|tap|follow|visit|call|whatsapp|bio|download|sign\s*up|book|demo)\b", re.I)
 
@@ -217,6 +217,12 @@ def main():
                                        + (" — Tamil glyphs show as boxes" if m.get("tamil") else ""))
         elif m.get("tamil") and not is_tamil_font(font, text_cfg.get("font_tamil", "")):
             R.add("critical", "fonts", f"{m['shot_id']}: Tamil text rendered in {font}, which has no Tamil glyphs")
+    tamil_shots = [m["shot_id"] for m in manifest if m.get("tamil")]
+    tamil_font = find_font("", tamil=True, fonts_folder=text_cfg.get("fonts_folder") or None,
+                           tamil_preferred=text_cfg.get("font_tamil", ""))
+    if tamil_shots and tamil_font and not ffmpeg_text_shaping(tamil_font):
+        R.add("critical", "fonts", f"Tamil overlays on {', '.join(tamil_shots)} were drawn without text shaping — "
+                                   f"vowel signs such as ை sit on the wrong side (install a current full FFmpeg build; 6.1 fails this)")
     latin_fonts = sorted({m["font"] for m in manifest if not m.get("tamil") and m.get("font") != "ffmpeg-default"})
     off_brand = [f for f in latin_fonts if not font_is_family(f, brand_font)]
     if off_brand:

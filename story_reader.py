@@ -19,6 +19,7 @@ Usage:
     python story_reader.py story_plan.xlsx
     python story_reader.py story_plan.xlsx --out custom_project.json
     python story_reader.py story_plan.xlsx --strict      # warnings become errors
+    python story_reader.py story_plan.xlsx --fresh       # forget previously fetched assets
 """
 
 import sys
@@ -126,7 +127,19 @@ DEFAULT_SETTINGS = {
     "card_budget":        "3",
     "cover_time":         "",
     "max_duration":       "90",
+    # stock fetch (asset_fetcher)
+    "max_queries_per_shot":  "3",
+    "fetch_budget_pexels":   "150",     # requests per run — Pexels allows 200/hour
+    "fetch_budget_pixabay":  "300",
+    "fetch_budget_unsplash": "40",      # Unsplash demo keys allow 50/hour
+    "fetch_cache_hours":     "24",
+    "max_download_mb":       "300",
 }
+
+# Fields the fetcher writes per shot. They live only in project.json, so phase 1
+# carries them forward instead of forgetting every fetched / approved asset.
+CARRY_FIELDS = ("local_file", "asset_type", "source", "status", "asset_id", "asset_url", "page_url", "author",
+                "license", "asset_score", "asset_resolution", "asset_duration", "query_used", "approved")
 
 
 def _norm_header(s) -> str:
@@ -135,6 +148,8 @@ def _norm_header(s) -> str:
 
 def _clean_path(v, default: str = "") -> str:
     s = str(v).strip() if v not in (None, "") else default
+    if s.startswith("←"):                            # old bgm_prompt_generator placeholder, not a path
+        return default
     if len(s) >= 2 and s[0] == s[-1] and s[0] in ('"', "'"):
         s = s[1:-1].strip()
     return s
@@ -322,8 +337,61 @@ def restraint_audit(shots: list, settings: dict) -> list:
     return notes
 
 
+def carry_forward(shots: list, prev_path: Path | None) -> list:
+    """
+    Keep the assets the fetcher already chose (and the ones review rejected) when
+    project.json is rebuilt from the sheet. A shot keeps its asset only while its
+    brief (keywords, scene, asset priority) is unchanged, its file still exists,
+    and the sheet neither names its own file nor asks for a swap.
+    """
+    notes: list = []
+    if not prev_path or not prev_path.exists():
+        return notes
+    try:
+        prev = json.loads(prev_path.read_text(encoding="utf-8-sig"))
+    except Exception:
+        return [f"Previous {prev_path.name} is unreadable — fetched assets are not carried forward"]
+    prev_by_id = {str(s.get("shot_id")): s for s in prev.get("shots", [])}
+    carried = 0
+    for s in shots:
+        p = prev_by_id.get(s["shot_id"])
+        if not p or s["kind"] != "stock":
+            continue
+        rejected = list(dict.fromkeys(p.get("rejected_ids", [])))
+        if s["local_file"]:
+            if rejected:
+                s["rejected_ids"] = rejected
+            continue                                   # the sheet names a file — the sheet wins
+        if s["status"] in ("swap", "error"):
+            if p.get("asset_id"):
+                rid = f"{p.get('source')}:{p.get('asset_type')}:{p.get('asset_id')}"
+                if rid not in rejected:
+                    rejected.append(rid)
+            if rejected:
+                s["rejected_ids"] = rejected
+            continue                                   # the sheet asks for a different asset
+        if rejected:
+            s["rejected_ids"] = rejected
+        same_brief = (p.get("keywords") == s["keywords"] and p.get("scene_desc") == s["scene_desc"]
+                      and p.get("asset_priority") == s["asset_priority"])
+        pf = p.get("local_file", "")
+        if not (pf and Path(pf).exists() and p.get("status") == "downloaded"):
+            continue
+        if not same_brief:
+            notes.append(f"Shot {s['shot_id']} — keywords/scene changed since the last fetch; a new asset will be fetched")
+            continue
+        for f in CARRY_FIELDS:
+            if f in p:
+                s[f] = p[f]
+        carried += 1
+    if carried:
+        notes.append(f"info: kept {carried} previously fetched asset(s) from {prev_path.name} "
+                     f"(set Status = swap on a shot to replace its asset)")
+    return notes
+
+
 # ── Build project.json ────────────────────────────────────────────────────────
-def build_project(xlsx_path: Path) -> tuple[dict, list, list]:
+def build_project(xlsx_path: Path, prev_json: Path | None = None) -> tuple[dict, list, list]:
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
     for sheet in ("Project Settings", "Shot Plan"):
         if sheet not in wb.sheetnames:
@@ -331,6 +399,7 @@ def build_project(xlsx_path: Path) -> tuple[dict, list, list]:
 
     settings = {**DEFAULT_SETTINGS, **{k: v for k, v in read_settings(wb).items() if v != ""}}
     shots, warnings, errors = read_shots(wb)
+    carry_notes = carry_forward(shots, prev_json)
     if not shots:
         errors.append("Shot Plan has no shots")
     warnings += restraint_audit(shots, settings)
@@ -423,10 +492,20 @@ def build_project(xlsx_path: Path) -> tuple[dict, list, list]:
             "overlay_budget": to_int(settings.get("overlay_budget"), 5),
             "card_budget":    to_int(settings.get("card_budget"), 3),
         },
+        "fetch": {
+            "max_queries_per_shot": max(1, to_int(settings.get("max_queries_per_shot"), 3)),
+            "budget": {p: to_int(settings.get(f"fetch_budget_{p}"), d)
+                       for p, d in (("pexels", 150), ("pixabay", 300), ("unsplash", 40))},
+            "cache_hours": to_float(settings.get("fetch_cache_hours"), 24.0),
+            "max_download_mb": to_float(settings.get("max_download_mb"), 300.0),
+        },
         "shots":    shots,
         "timeline": timeline,
         "validation": {"warnings": warnings, "errors": errors},
     }
+    infos = [n[len("info: "):] for n in carry_notes if n.startswith("info: ")]
+    warnings += [n for n in carry_notes if not n.startswith("info: ")]
+    project["carried_forward"] = infos
     return project, warnings, errors
 
 
@@ -435,6 +514,8 @@ def main():
     parser.add_argument("xlsx", help="Path to story_plan.xlsx")
     parser.add_argument("--out", default=None, help="Output JSON path (default: project.json next to the xlsx)")
     parser.add_argument("--strict", action="store_true", help="Treat warnings as errors")
+    parser.add_argument("--fresh", action="store_true",
+                        help="Do not carry fetched assets forward from the existing project.json")
     args = parser.parse_args()
 
     xlsx_path = Path(args.xlsx)
@@ -442,9 +523,8 @@ def main():
         sys.exit(f"❌  File not found: {xlsx_path}")
 
     print(f"\n  Reading {xlsx_path.name}...")
-    project, warnings, errors = build_project(xlsx_path)
-
     out_path = Path(args.out) if args.out else xlsx_path.parent / "project.json"
+    project, warnings, errors = build_project(xlsx_path, None if args.fresh else out_path)
     out_path.write_text(json.dumps(project, indent=2, ensure_ascii=False), encoding="utf-8")
 
     kinds = {}
@@ -454,6 +534,8 @@ def main():
           f"|  assembled ≈ {project['planned_assembled_duration']}s (after transition overlaps)")
     print(f"  ✅  treatments: " + "  ".join(f"{k}×{v}" for k, v in sorted(kinds.items())))
     print(f"  ✅  project.json → {out_path.resolve()}")
+    for note in project.get("carried_forward", []):
+        print(f"  ✅  {note}")
 
     if warnings:
         print(f"\n  ⚠️  {len(warnings)} warning(s):")

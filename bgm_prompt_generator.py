@@ -34,6 +34,7 @@ Usage:
 
 import re
 import sys
+import math
 import json
 import html
 import argparse
@@ -181,7 +182,7 @@ def analyse_arc(shots: list, timeline: list | None = None) -> dict:
                 "type": "pivot_moment",
                 "note": f"Emotional pivot at {s['start_time']}s — music should brighten here",
             })
-        if s["grade"] == "cta":
+        if s["grade"] == "cta" and not any(k["type"] == "cta_moment" for k in key_moments):
             key_moments.append({
                 "time": s["start_time"],
                 "type": "cta_moment",
@@ -257,14 +258,20 @@ ARC_TYPE_MUSIC = {
 }
 
 
+def music_seconds(brief: dict) -> int:
+    """Whole seconds of music to ask for — rounded UP, so a 47.8 s video never ends in 0.8 s of silence."""
+    return int(math.ceil(round(float(brief["total_duration"]), 3)))
+
+
 def _cue_time(cue: str) -> float:
     """
     Sort key for a timeline cue string. Extracts the leading timestamp so cues
     order chronologically; key moments (⚑) and unparseable cues sort to the end.
     Handles both "m:ss — ..." and "12.5s — ..." prefixes robustly.
     """
-    if cue.startswith("⚑"):
-        return 99999.0
+    if cue.startswith("⚑"):                       # legacy form: "⚑  … at 12.5s …"
+        m = re.search(r"at\s+([0-9]*\.?[0-9]+)\s*s", cue)
+        return float(m.group(1)) if m else 99999.0
     m = re.match(r"\s*(\d+):(\d+)", cue)          # m:ss form, e.g. "0:00 — ..."
     if m:
         return int(m.group(1)) * 60 + int(m.group(2))
@@ -318,7 +325,7 @@ def build_bgm_brief(analysis: dict, project: dict) -> dict:
 
     # Add key musical moments
     for km in analysis["key_moments"]:
-        timeline_cues.append(f"⚑  {km['note']}")
+        timeline_cues.append(f"{km['time']:g}s ⚑ {km['note']}")
     timeline_cues.sort(key=_cue_time)
 
     return {
@@ -333,7 +340,10 @@ def build_bgm_brief(analysis: dict, project: dict) -> dict:
         "tags":            music_data["tags"],
         "timeline_cues":   timeline_cues,
         "key_moments":     analysis["key_moments"],
-        "platform":        "Instagram Reels" if project.get("height", 1920) > project.get("width", 1080) else "YouTube",
+        "platform":        {"reels": "Instagram Reels", "instagram": "Instagram Reels", "shorts": "YouTube Shorts",
+                            "tiktok": "TikTok", "youtube": "YouTube", "landscape": "YouTube", "16:9": "YouTube"}.get(
+                               str(project.get("platform", "")).lower(),
+                               "Instagram Reels" if project.get("height", 1920) > project.get("width", 1080) else "YouTube"),
         "audio_mode":      "B (Music + Captions)" if not project.get("audio", {}).get("vo_path") else "B + VO overlay",
     }
 
@@ -341,7 +351,7 @@ def build_bgm_brief(analysis: dict, project: dict) -> dict:
 # ── Tool-specific prompt builders ─────────────────────────────────────────────
 
 def build_suno_prompt(brief: dict) -> str:
-    dur_secs = int(brief["total_duration"])
+    dur_secs = music_seconds(brief)
     mins, secs = divmod(dur_secs, 60)
     dur_str = f"{mins}:{secs:02d}"
     cues_str = "\n".join(f"  • {c}" for c in brief["timeline_cues"])
@@ -375,7 +385,7 @@ def build_suno_prompt(brief: dict) -> str:
 
 
 def build_udio_prompt(brief: dict) -> str:
-    dur_secs = int(brief["total_duration"])
+    dur_secs = music_seconds(brief)
     cues_condensed = " | ".join(brief["timeline_cues"][:6])
     return f"""Instrumental {brief['style']}, {brief['bpm_range']}, {brief['tags']}.
 
@@ -389,7 +399,7 @@ Music energy level: moderate — supportive, not dominant."""
 
 
 def build_stable_audio_prompt(brief: dict) -> str:
-    dur_secs = int(brief["total_duration"])
+    dur_secs = music_seconds(brief)
     return f"""{brief['style']}, {brief['tags']}, {brief['bpm_range']},
 {brief['instruments']},
 mood progression: {brief['mood_arc']},
@@ -399,7 +409,7 @@ professional audio production quality"""
 
 
 def build_soundraw_prompt(brief: dict) -> str:
-    dur_secs = int(brief["total_duration"])
+    dur_secs = music_seconds(brief)
     return f"""SOUNDRAW SETTINGS:
 ─────────────────────────────────────
 Genre:      Cinematic / Ambient
@@ -418,7 +428,7 @@ MANUAL NOTES:
 
 
 def build_generic_prompt(brief: dict) -> str:
-    dur_secs = int(brief["total_duration"])
+    dur_secs = music_seconds(brief)
     mins, secs = divmod(dur_secs, 60)
     cues_str = "\n".join(f"  {c}" for c in brief["timeline_cues"])
     return f"""BGM MUSIC BRIEF
@@ -470,7 +480,7 @@ def build_gemini_prompt(brief: dict) -> str:
       • Platform context and mix guidance
       • Duration + fade out instruction
     """
-    dur_secs   = int(brief["total_duration"])
+    dur_secs   = music_seconds(brief)
     mins, secs = divmod(dur_secs, 60)
     dur_str    = f"{mins} minute{'s' if mins != 1 else ''} and {secs} seconds" if mins else f"{secs} seconds"
 
@@ -743,7 +753,7 @@ def build_html(brief: dict, prompts: dict, project_name: str) -> str:
   1. Save the file as <code>bgm.mp3</code> (or <code>bgm.wav</code>) in your music folder<br>
   2. Open <code>story_plan.xlsx</code> → Project Settings sheet<br>
   3. Paste the full file path into the <code>bgm_path</code> row<br>
-  4. Set <code>bgm_volume</code> to <code>0.35</code> (BGM sits under VO — quieter than main music)<br>
+  4. Optional: adjust <code>bgm_volume</code> (default <code>0.4</code>; the VO ducks it automatically)<br>
   5. Continue the pipeline — <code>audio_mixer.py</code> will layer it automatically
 </div>
 
@@ -778,11 +788,12 @@ def update_excel_bgm_note(xlsx_path: Path, brief: dict):
         ws   = wb["Project Settings"]
         for row in ws.iter_rows(min_row=3):
             if row[0].value == "bgm_path" and not row[1].value:
-                row[1].value = "← Paste your generated BGM file path here"
-                from openpyxl.styles import Font, PatternFill
-                row[1].font = Font(color="DE7D14", italic=True, name="Arial", size=9)
-            if row[0].value == "bgm_volume" and not row[1].value:
-                row[1].value = "0.35"
+                # Highlight the cell and leave the hint in the Notes column — never put prose in the
+                # value cell: story_reader would read it as a file path.
+                from openpyxl.styles import PatternFill
+                row[1].fill = PatternFill("solid", fgColor="FDEBD0")
+                if len(row) > 2 and not row[2].value:
+                    row[2].value = f"Paste the generated BGM file path in the Value cell ({music_seconds(brief)}s track)"
         wb.save(xlsx_path)
     except Exception as e:
         print(f"  ⚠️  Could not update Excel: {e}")

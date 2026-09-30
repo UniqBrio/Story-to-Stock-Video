@@ -34,6 +34,8 @@ Options:
     --shot ID         Phase 3 only: normalise a single shot
     --contact-sheet N Stage-4 gate: run phase 1, gather N candidates/shot → contact_sheet.html, STOP for G4
     --apply-picks F   Download the G4 picks from F (picks.json), then continue with phases 3–8
+    --apply-review F  Apply keep/swap verdicts saved from validation_report.html (review.json),
+                      re-fetch the swapped shots, then continue with phases 3–8
 
 Requirements: pip install openpyxl pillow · FFmpeg (with libfreetype/harfbuzz) in PATH
 """
@@ -120,6 +122,7 @@ def main():
     ap.add_argument("--shot", default=None)
     ap.add_argument("--contact-sheet", type=int, default=0, metavar="N")
     ap.add_argument("--apply-picks", default=None, metavar="PICKS_JSON")
+    ap.add_argument("--apply-review", default=None, metavar="REVIEW_JSON")
     args = ap.parse_args()
 
     xlsx_path = Path(args.xlsx)
@@ -129,6 +132,11 @@ def main():
         sys.exit(f"❌  Invalid --only phase {args.only_phase}. Valid: {sorted(PHASES)}")
     if not (1 <= args.from_phase <= 8):
         sys.exit("❌  --from must be 1–8")
+    for flag, val in (("--apply-picks", args.apply_picks), ("--apply-review", args.apply_review)):
+        if val and not Path(val).exists():
+            sys.exit(f"❌  {flag}: file not found: {val}")
+        if val and (args.from_phase > 2 or args.skip_fetch or (args.only_phase and args.only_phase != 2)):
+            sys.exit(f"❌  {flag} is applied in Phase 2 — run without --from 3+/--skip-fetch/--only")
 
     print("\n" + "█"*62 + "\n  UniqBrio — Story to Stock Video Pipeline (SVOS v2 render layer)"
           "\n  One Excel file → one final MP4 + QA report\n" + "█"*62)
@@ -187,7 +195,9 @@ def main():
             pa = [str(proj_json)]
             if args.apply_picks:
                 pa += ["--apply-picks", args.apply_picks]
-            elif args.refetch:
+            if args.apply_review:
+                pa += ["--apply-review", args.apply_review]
+            if args.refetch and not args.apply_picks:
                 pa += ["--refetch"]
         elif phase == 3:
             pa = [str(proj_json)] + (["--shot", args.shot] if args.shot else []) + force + drop

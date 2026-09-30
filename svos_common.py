@@ -100,6 +100,45 @@ def check_ffmpeg() -> None:
         sys.exit("❌  " + " and ".join(missing) + " not found.\n"
                  "    Download https://ffmpeg.org/download.html and add ffmpeg/bin to PATH")
 
+_SHAPING: dict = {}
+
+def ffmpeg_text_shaping(font_path: str = "", ffmpeg: str = "ffmpeg") -> bool:
+    """
+    True if this FFmpeg's drawtext really shapes Tamil. Without shaping, pre-base
+    vowel signs (ெ ே ை ொ ோ ௌ) are drawn AFTER the consonant, so 'நம்பிக்கை' is
+    misspelled on screen even with the right font. FFmpeg 6.1 exposes a
+    text_shaping option yet still gets this wrong, so the option proves nothing.
+    Functional probe: draw 'க' alone and 'கை' at the same x, then find where the
+    lone 'க' lines up inside 'கை'. Unshaped it sits at offset ~0 (sign drawn after);
+    shaped it is pushed right by the width of the pre-base sign ை.
+    """
+    font = font_path or find_font("", tamil=True)
+    key = (ffmpeg, font)
+    if key in _SHAPING:
+        return _SHAPING[key]
+    W, H = 200, 100
+    def frame(text: str) -> bytes:
+        vf = f"drawtext=fontfile='{ff_font_arg(font)}':text='{text}':fontsize=64:fontcolor=white:x=10:y=10"
+        r = subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+                            "-i", f"color=black:s={W}x{H}", "-frames:v", "1", "-vf", vf,
+                            "-f", "rawvideo", "-pix_fmt", "gray", "-"], capture_output=True, timeout=30)
+        return r.stdout if r.returncode == 0 and len(r.stdout) == W * H else b""
+    ok = False
+    if font and Path(font).exists():
+        try:
+            ka, kai = frame("\u0B95"), frame("\u0B95\u0BC8")
+            ink = [(x, y) for y in range(H) for x in range(W) if ka and ka[y * W + x] > 128]
+            if ink and kai:
+                glyph_w = max(x for x, _ in ink) - min(x for x, _ in ink) + 1
+                def overlap(dx: int) -> float:
+                    return sum(1 for x, y in ink if x + dx < W and kai[y * W + x + dx] > 128) / len(ink)
+                best = max(range(0, W // 2), key=overlap)
+                ok = best > glyph_w * 0.3          # 'க' found shifted right, past the pre-base sign ை
+        except Exception:
+            ok = False
+    _SHAPING[key] = ok
+    return ok
+
 _LOG_PATH: Path | None = None
 
 def set_log(path: Path | str | None) -> None:

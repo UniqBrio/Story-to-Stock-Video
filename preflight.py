@@ -7,7 +7,7 @@ missing key, font or file stops the run up front instead of producing a
 quietly broken video.
 
   Critical (exit 1) : ffmpeg/ffprobe or the drawtext filter missing ·
-                      Tamil overlay text with no Tamil font ·
+                      Tamil overlay text with no Tamil font, or an FFmpeg that cannot shape Tamil ·
                       stock shots still to fetch but no provider key ·
                       T4 product insert file missing · vo_path set but missing
   Warnings          : brand font not found (fallback used) · music/BGM/sting/logo missing ·
@@ -25,7 +25,8 @@ import argparse
 import subprocess
 from pathlib import Path
 
-from svos_common import load_project, banner, find_font, font_is_family, is_tamil, shot_kind, env_key
+from svos_common import (load_project, banner, find_font, font_is_family, is_tamil, shot_kind, env_key,
+                         ffmpeg_text_shaping)
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -82,9 +83,14 @@ def main():
             warn.append(f"Brand font '{brand}' not found — overlays will use {Path(latin).name} "
                         f"(put {brand} TTFs in fonts/)")
     tamil_ids = [sid for sid, t in texts if is_tamil(t)]
-    if tamil_ids and not find_font("", tamil=True, fonts_folder=folder, tamil_preferred=tcfg.get("font_tamil", "")):
+    tamil_font = find_font("", tamil=True, fonts_folder=folder, tamil_preferred=tcfg.get("font_tamil", ""))
+    if tamil_ids and not tamil_font:
         render_crit.append(f"Tamil text on {', '.join(tamil_ids)} but no Tamil font — glyphs would render as boxes "
                     f"(fonts/NotoSansTamil-Bold.ttf is bundled; check it is present)")
+    if tamil_ids and tamil_font and not missing_tools and not ffmpeg_text_shaping(tamil_font):
+        render_crit.append(f"Tamil text on {', '.join(tamil_ids)} but this FFmpeg cannot shape Tamil — vowel signs "
+                           f"like ை would be drawn on the wrong side of the letter (misspelled on screen). "
+                           f"Install a current full FFmpeg build with HarfBuzz (gyan.dev 'full' on Windows); FFmpeg 6.1 fails this check")
 
     # ── Shots / sources ───────────────────────────────────────────────────────
     to_fetch = []

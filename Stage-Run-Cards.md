@@ -67,8 +67,10 @@ After approval: download production-resolution files, update project.json per sh
 
 Render-layer commands:
   python run_pipeline.py story_plan.xlsx --contact-sheet 8      # candidates.json + contact_sheet.html, no downloads
-  (founder picks in the browser → saves picks.json next to project.json)
-  python asset_fetcher.py project.json --apply-picks picks.json # downloads only the approved picks, logs licenses
+  (founder picks in the browser → "Save picks.json"; duplicate picks are flagged)
+  python run_pipeline.py story_plan.xlsx --apply-picks picks.json   # downloads only the approved picks, logs licenses, renders
+  python validation_report.py project.json                          # Keep / Swap per shot → "Save review.json"
+  python run_pipeline.py story_plan.xlsx --apply-review review.json # re-fetches swapped shots; rejected assets never return
 ```
 
 ## CARD 5 — Assembly

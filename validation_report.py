@@ -6,14 +6,11 @@ After Phase 2 (asset_fetcher), reads project.json and generates a single
 HTML file showing every downloaded asset side-by-side with its scene
 description, keywords, and text overlay.
 
-You review the page in 60–90 seconds, then:
-    • Good fit  → leave Status as "downloaded"
-    • Wrong fit → change Status to "swap" in Excel
-    • No file   → change Status to "error" in Excel
-
-Then run:
-    python asset_fetcher.py project.json --force   (retries "swap"/"error" shots)
-    python prompt_generator.py project.json        (generates AI prompts for anything unfixable)
+You review the page in 60–90 seconds: click Keep or Swap on each shot, then
+"Save review.json". Then run:
+    python run_pipeline.py story_plan.xlsx --apply-review <path to review.json>
+Swapped shots are re-fetched and the rejected asset is never offered again.
+For anything stock cannot fix: python prompt_generator.py project.json
 
 Output: validation_report.html (in same folder as project.json)
 
@@ -21,7 +18,7 @@ Also does basic sanity checks:
     • File exists and is non-zero
     • Video: probes for duration and resolution (flags if < 1280x720)
     • Image: checks file size (flags if < 50KB — likely a thumbnail)
-    • Flags duplicate source creators (if same provider ID downloaded twice)
+    • Flags the same asset used on two shots, and the same photographer on two shots
 
 Usage:
     python validation_report.py project.json
@@ -39,6 +36,8 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 
+from svos_common import infer_asset_type
+
 # Box-drawing/emoji output crashes on Windows' default cp1252 console.
 # Force UTF-8 so the banners and ✅/❌ markers never abort a run.
 try:
@@ -54,7 +53,7 @@ def probe_video(path: Path) -> dict:
     """Return duration, width, height for a video file using ffprobe."""
     try:
         cmd = [
-            "ffprobe", "-v", "error",
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
             "-show_entries", "stream=width,height,duration",
             "-show_entries", "format=duration,size",
             "-of", "json",
@@ -148,19 +147,38 @@ def sanity_flags(shot: dict, asset_type: str, probe: dict, target_w: int, target
 
 # ── Image embedding ───────────────────────────────────────────────────────────
 
-def embed_image(path: Path) -> str:
-    """Return base64 data URI for embedding in HTML (images only)."""
+def embed_image(path: Path, max_px: int = 540) -> str:
+    """
+    Base64 data URI of a DOWNSCALED preview. (It used to embed the first 2 MB of
+    the file, which cut every large original off half-way — the reviewer judged
+    a broken picture.)
+    """
     try:
-        ext = path.suffix.lower()
-        mime = {".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-                ".png": "image/png",  ".gif": "image/gif",
-                ".webp": "image/webp"}.get(ext, "image/jpeg")
-        with open(path, "rb") as f:
-            data = f.read(2 * 1024 * 1024)   # max 2MB for embedding
-        b64 = base64.b64encode(data).decode("ascii")
-        return f"data:{mime};base64,{b64}"
+        from io import BytesIO
+        from PIL import Image
+        with Image.open(path) as im:
+            im = im.convert("RGB")
+            im.thumbnail((max_px, max_px * 2))
+            buf = BytesIO()
+            im.save(buf, "JPEG", quality=82)
+        return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
     except Exception:
-        return ""
+        pass
+    try:                                           # no Pillow: ask FFmpeg for a small JPEG instead
+        r = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-frames:v", "1",
+                            "-vf", f"scale='min({max_px},iw)':-2", "-f", "image2", "-c:v", "mjpeg", "-"],
+                           capture_output=True, timeout=20)
+        if r.returncode == 0 and r.stdout:
+            return "data:image/jpeg;base64," + base64.b64encode(r.stdout).decode("ascii")
+    except Exception:
+        pass
+    try:
+        if path.stat().st_size <= 2 * 1024 * 1024:  # small enough to embed whole
+            mime = {".png": "image/png", ".gif": "image/gif", ".webp": "image/webp"}.get(path.suffix.lower(), "image/jpeg")
+            return f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode("ascii")
+    except Exception:
+        pass
+    return ""
 
 
 def video_thumbnail_cmd(video_path: Path, thumb_path: Path) -> bool:
@@ -205,13 +223,22 @@ def grade_pill(grade: str) -> str:
 # ── Main HTML builder ─────────────────────────────────────────────────────────
 
 def build_report(project: dict, out_path: Path, ffmpeg_available: bool):
-    shots        = project["shots"]
+    shots        = project.get("shots", [])
+    xlsx_name    = Path(project.get("source_xlsx") or "story_plan.xlsx").name
     project_name = project.get("project_name", "My Video")
     target_w     = project.get("width", 1080)
     target_h     = project.get("height", 1920)
 
     thumb_dir = out_path.parent / "_validation_thumbs"
-    thumb_dir.mkdir(exist_ok=True)
+    thumb_dir.mkdir(parents=True, exist_ok=True)
+
+    # Same asset on two shots, or the same photographer on two shots (≈ same shoot)
+    by_asset, by_author = {}, {}
+    for s_ in shots:
+        if s_.get("asset_id"):
+            by_asset.setdefault((s_.get("source"), s_.get("asset_id")), []).append(s_.get("shot_id"))
+        if s_.get("author") and s_.get("source"):
+            by_author.setdefault((s_.get("source"), s_.get("author")), []).append(s_.get("shot_id"))
 
     total_shots  = len(shots)
     ok_count     = 0
@@ -224,8 +251,13 @@ def build_report(project: dict, out_path: Path, ffmpeg_available: bool):
         shot_id    = shot.get("shot_id", str(idx))
         scene_desc = shot.get("scene_desc", "")
         keywords   = shot.get("keywords", [])
-        asset_type = shot.get("asset_type", "")
         local_file = shot.get("local_file", "")
+        asset_type = shot.get("asset_type", "")
+        inferred   = infer_asset_type(local_file)
+        if inferred and asset_type not in ("video", "image"):
+            asset_type = inferred
+        elif inferred and inferred != asset_type:
+            asset_type = inferred                   # trust the file over a mistyped Asset Type column
         source     = shot.get("source", "")
         status     = shot.get("status", "pending")
         grade      = shot.get("color_grade", "none")
@@ -264,7 +296,8 @@ def build_report(project: dict, out_path: Path, ffmpeg_available: bool):
             if asset_type == "video":
                 probe = probe_video(file_path)
                 # Extract thumbnail
-                thumb_path = thumb_dir / f"thumb_{shot_id}.jpg"
+                st = file_path.stat()                # keyed on the file, so a swapped asset gets a fresh thumbnail
+                thumb_path = thumb_dir / f"thumb_{shot_id}_{int(st.st_mtime)}_{st.st_size}.jpg"
                 if not thumb_path.exists() and ffmpeg_available:
                     video_thumbnail_cmd(file_path, thumb_path)
                 if thumb_path.exists():
@@ -276,6 +309,12 @@ def build_report(project: dict, out_path: Path, ffmpeg_available: bool):
                 img_label = f"Image — {probe.get('width',0)}×{probe.get('height',0)} · {probe.get('size',0)//1024}KB"
 
             flags = sanity_flags(shot, asset_type, probe, target_w, target_h)
+            twins = [x for x in by_asset.get((source, shot.get("asset_id")), []) if x != shot_id]
+            if shot.get("asset_id") and twins:
+                flags.append(f"❌ Same asset also used on shot {', '.join(twins)}")
+            same_author = [x for x in by_author.get((source, shot.get("author")), []) if x != shot_id]
+            if shot.get("author") and same_author and not twins:
+                flags.append(f"⚠️ Same photographer as shot {', '.join(same_author)} — may look like one shoot")
 
             if any("❌" in f for f in flags):
                 card_border = "#c0392b"
@@ -500,19 +539,22 @@ def build_report(project: dict, out_path: Path, ffmpeg_available: bool):
   <strong>How to review:</strong><br>
   1. Look at each asset against its scene description. Ask: <em>"Does this image feel like that scene?"</em><br>
   2. Click <strong>✅ Keep</strong> if it works, <strong>🔄 Swap</strong> if it needs replacing, <strong>❌ No file</strong> if nothing was downloaded.<br>
-  3. After reviewing, click <strong>"Copy Swap List"</strong> at the bottom → paste into a note.<br>
-  4. Open <code>story_plan.xlsx</code> → change Status column for those shots to <code>swap</code> or <code>error</code>.<br>
-  5. Run: <code>python asset_fetcher.py project.json --force</code> to retry swapped shots.<br>
-  6. For anything still wrong: <code>python prompt_generator.py project.json</code> → generate AI images.
+  3. Click <strong>💾 Save review.json</strong> at the bottom (it lands in your Downloads folder).<br>
+  4. Run: <code>python run_pipeline.py {html.escape(xlsx_name)} --apply-review &lt;path to review.json&gt;</code><br>
+     Swapped shots are re-fetched, the rejected asset is never offered again, and the render continues.<br>
+  5. For anything stock cannot fix: <code>python prompt_generator.py project.json</code> → generate AI images.
 </div>
 
 {cards}
 
 <div id="swap-list">
-  <h3>🔄 Shots to Swap / Fix</h3>
+  <h3>🔄 Your review — shots to swap / fix</h3>
   <ul id="swap-items"></ul>
-  <button onclick="copySwapList()" style="margin-top:10px;background:#DE7D14;color:#fff;padding:8px 16px">
-    📋 Copy Swap List
+  <button onclick="saveReview()" style="margin-top:10px;background:#DE7D14;color:#fff;padding:8px 16px">
+    💾 Save review.json
+  </button>
+  <button onclick="copySwapList()" style="margin-top:10px;background:#444;color:#fff;padding:8px 16px">
+    📋 Copy list
   </button>
 </div>
 
@@ -523,10 +565,12 @@ def build_report(project: dict, out_path: Path, ffmpeg_available: bool):
 
 <script>
 const swapShots = {{}};
+const verdicts = {{}};
 
 function markShot(id, action) {{
   const card = document.getElementById('shot-' + id);
   card.classList.remove('marked-ok','marked-swap');
+  verdicts[id] = action === 'ok' ? 'keep' : action;
   if (action === 'ok') {{
     card.style.borderColor = '#27ae60';
     card.style.opacity = '0.65';
@@ -547,7 +591,7 @@ function updateSwapList() {{
   const list = document.getElementById('swap-list');
   const items = document.getElementById('swap-items');
   const keys = Object.keys(swapShots);
-  if (keys.length === 0) {{
+  if (Object.keys(verdicts).length === 0) {{
     list.style.display = 'none';
     return;
   }}
@@ -557,12 +601,20 @@ function updateSwapList() {{
   ).join('');
 }}
 
+function saveReview() {{
+  if (!Object.keys(verdicts).length) {{ alert('Mark at least one shot first.'); return; }}
+  const blob = new Blob([JSON.stringify(verdicts, null, 2)], {{type: 'application/json'}});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'review.json';
+  document.body.appendChild(a); a.click(); a.remove();
+}}
+
 function copySwapList() {{
   const keys = Object.keys(swapShots);
   if (!keys.length) {{ alert('No shots marked for swap yet.'); return; }}
   const text = keys.map(k => `Shot ${{k}} → Status = ${{swapShots[k]}}`).join('\\n');
-  navigator.clipboard.writeText(text).then(() => {{
-    alert('Swap list copied to clipboard!\\n\\n' + text);
+  navigator.clipboard.writeText(JSON.stringify(verdicts, null, 2)).then(() => {{
+    alert('Review copied (paste into review.json):\\n\\n' + text);
   }});
 }}
 </script>
@@ -612,8 +664,8 @@ def main():
     print(f"\n  📄  Report → {out_path}")
     print(f"\n  Open the HTML file in your browser to review.")
     print(f"\n  AFTER REVIEW:")
-    print(f"  • Mark shots as 'swap' or 'error' in Excel")
-    print(f"  • python asset_fetcher.py project.json --force   (retry swapped)")
+    print(f"  • Click Keep / Swap per shot, then 'Save review.json'")
+    print(f"  • python run_pipeline.py {Path(project.get('source_xlsx') or 'story_plan.xlsx').name} --apply-review <review.json>")
     print(f"  • python prompt_generator.py project.json        (generate AI prompts)")
     print(f"{'═'*62}\n")
 

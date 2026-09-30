@@ -180,6 +180,8 @@ python run_pipeline.py story_plan.xlsx --preflight           # phase 1 + checks 
 python run_pipeline.py story_plan.xlsx                       # full render + QA
 python run_pipeline.py story_plan.xlsx --contact-sheet 8     # G4: candidates only, no downloads
 python run_pipeline.py story_plan.xlsx --from 2 --apply-picks picks.json
+python validation_report.py project.json              # G5: Keep / Swap, Save review.json
+python run_pipeline.py story_plan.xlsx --apply-review review.json   # re-fetch swapped shots, render
 python run_pipeline.py story_plan.xlsx --from 3 --force      # re-render, keep assets
 python selftest.py                                           # synthetic end-to-end check
 ```

@@ -7,7 +7,9 @@ mixing, export and an automated QA pass.
 ## Requirements
 
 - Python 3.10+
-- [FFmpeg](https://ffmpeg.org/) and `ffprobe` on your `PATH`
+- [FFmpeg](https://ffmpeg.org/) and `ffprobe` on your `PATH` — a current **full** build with
+  libfreetype and HarfBuzz (on Windows, the gyan.dev "full" build). FFmpeg 6.1 misspells Tamil
+  overlays by drawing vowel signs such as ை on the wrong side. Preflight checks this for you.
 - `pip install -r requirements.txt` (openpyxl, Pillow)
 - Fonts: Inter and Noto Sans Tamil ship in `fonts/` (SIL OFL) and are used before any system font
 
@@ -45,7 +47,7 @@ Phases run in sequence:
 | 8 | `qa_check` | Automated QA battery → `Output/qa_report.md` |
 
 Useful flags: `--from N`, `--only N`, `--force`, `--skip-fetch`, `--no-qa`,
-`--preflight` (phase 1 + checks only), `--allow-drop` (see below).
+`--preflight` (phase 1 + checks only), `--allow-drop` (see below), `--apply-review F` (see below).
 
 The pipeline fails loudly. If any shot ends up without an asset, the fetcher exits non-zero and
 nothing is rendered. Phases 3–4 refuse to assemble a video with a missing shot, because a dropped
@@ -53,9 +55,34 @@ shot shortens the picture and the VO runs past it. Pass `--allow-drop` only for 
 render. QA then still marks the result **FIX BEFORE G6**.
 Run `python run_pipeline.py --help` for the full list.
 
-Optional utilities: `validation_report.py` (review fetched assets side by side),
-`prompt_generator.py` (AI image prompts for shots with no usable stock),
-`bgm_prompt_generator.py` (BGM brief from the story arc).
+### Reviewing and swapping assets
+
+Fetched assets are remembered. Rerunning phase 1 keeps each shot's asset while its keywords,
+scene and asset priority are unchanged. Change them, or set Status = `swap`, to get a new one.
+`--fresh` on `story_reader.py` forgets everything.
+
+```bash
+python run_pipeline.py story_plan.xlsx --contact-sheet 8        # G4: pick per shot, "Save picks.json"
+python run_pipeline.py story_plan.xlsx --apply-picks picks.json
+
+python validation_report.py project.json                        # Keep / Swap per shot, "Save review.json"
+python run_pipeline.py story_plan.xlsx --apply-review review.json
+```
+
+A swapped asset is recorded per shot and never offered again. If stock can't fill a shot, run
+`python prompt_generator.py project.json`, generate the images, save them as
+`shot_<ID>_*.jpg` in `Assets/Images`, then run `python prompt_generator.py project.json --link`.
+
+### Stock search settings (Project Settings sheet)
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `max_queries_per_shot` | 3 | Keyword phrases searched per shot |
+| `fetch_budget_pexels` / `_pixabay` / `_unsplash` | 150 / 300 / 40 | Requests per run per provider |
+| `fetch_cache_hours` | 24 | Reuse API responses from `Assets/_cache/api` |
+| `max_download_mb` | 300 | Largest single download |
+
+Other utilities: `bgm_prompt_generator.py` writes a BGM brief from the story arc.
 
 ## Self-test
 
@@ -64,7 +91,13 @@ python selftest.py
 ```
 
 Generates synthetic media into `_selftest/` and runs the pipeline end to end — no API
-keys needed. Set `SVOS_LOGO_PATH` (or place `assets/logo.png`) to use your own logo;
+keys needed. The offline fetcher and review-loop tests run with:
+
+```bash
+python -m unittest discover -s tests
+```
+
+For the self-test: Set `SVOS_LOGO_PATH` (or place `assets/logo.png`) to use your own logo;
 otherwise a plain wordmark is generated.
 
 ## Documentation

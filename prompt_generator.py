@@ -25,12 +25,15 @@ Usage:
     python prompt_generator.py project.json --tool midjourney
 """
 
+import re
 import sys
 import json
 import html
 import argparse
 from pathlib import Path
 from datetime import datetime
+
+from svos_common import shot_kind, assets_dir, IMAGE_EXT, save_project
 
 # Box-drawing/emoji output crashes on Windows' default cp1252 console.
 # Force UTF-8 so the banners and ✅/❌ markers never abort a run.
@@ -172,7 +175,8 @@ def build_prompt(shot: dict, arc_pos: str, tool: str, video_format: str) -> dict
         ar_note = "portrait 9:16 vertical format"
     elif "1920x1080" in video_format or "16:9" in video_format:
         ar_note = "landscape 16:9 horizontal format"
-        suffix  = suffix.replace("9:16", "16:9").replace("--ar 9:16", "--ar 16:9")
+        suffix  = (suffix.replace("9:16", "16:9").replace("(portrait)", "(landscape)")
+                   .replace("Portrait", "Landscape").replace("portrait", "landscape"))
     else:
         ar_note = "portrait 9:16 vertical format"
 
@@ -183,7 +187,9 @@ def build_prompt(shot: dict, arc_pos: str, tool: str, video_format: str) -> dict
     human_words = ["person", "student", "teacher", "coach", "owner", "woman", "man",
                    "child", "kid", "athlete", "parent", "family", "people", "crowd",
                    "vijay", "ananya", "founder", "leader"]
-    has_human   = any(w in scene_desc.lower() or w in keyword_str.lower() for w in human_words)
+    # whole words only — "personal", "management" and "kidney" are not people
+    text_l      = f"{scene_desc} {keyword_str}".lower()
+    has_human   = any(re.search(rf"\b{w}s?\b", text_l) for w in human_words)
 
     if has_human:
         subject_block = (
@@ -459,6 +465,47 @@ function copyPrompt(id, btn) {{
 </html>"""
 
 
+# ── Link generated images back into the plan ─────────────────────────────────
+
+def link_images(project: dict, proj_path: Path, images_dir: Path) -> None:
+    """
+    Wire generated images into project.json so the render picks them up (and phase 1
+    carries them forward): local_file, asset_type=image, status=downloaded, and an
+    AI-generated provenance note for the licence log (platforms ask for disclosure).
+    """
+    files = sorted(f for f in images_dir.glob("shot_*") if f.suffix.lower() in IMAGE_EXT) if images_dir.exists() else []
+    linked = []
+    for shot in project.get("shots", []):
+        if shot_kind(shot) != "stock":
+            continue
+        mine = [f for f in files if re.match(rf"shot_{re.escape(shot['shot_id'])}(_|\.)", f.name)]
+        if not mine:
+            continue
+        newest = max(mine, key=lambda f: f.stat().st_mtime)
+        if shot.get("local_file") == str(newest) and shot.get("status") == "downloaded":
+            continue
+        if shot.get("source") not in ("", None, "ai-generated") and shot.get("status") == "downloaded" \
+                and shot.get("local_file") and Path(shot["local_file"]).exists() and shot.get("local_file") != str(newest):
+            # a working stock asset is in place; only replace it if the image is newer than the stock file
+            if newest.stat().st_mtime <= Path(shot["local_file"]).stat().st_mtime:
+                continue
+        for f in ("asset_id", "asset_url", "page_url", "author", "asset_score", "query_used", "approved"):
+            shot.pop(f, None)
+        shot.update({"local_file": str(newest), "asset_type": "image", "status": "downloaded",
+                     "source": "ai-generated", "license": "AI-generated image — disclose as AI content where the platform requires",
+                     "author": f"{shot.get('prompt_tool', 'AI')} (prompt in ai_prompt)"})
+        if shot.get("ken_burns", "none") == "none":
+            shot["ken_burns"] = "zoom_in"          # a still without motion freezes the frame (QA flags it)
+        linked.append(f"{shot['shot_id']} ← {newest.name}")
+    save_project(project, proj_path)
+    print(f"\n  Linked {len(linked)} generated image(s) from {images_dir}")
+    for ln in linked:
+        print(f"    ✅  {ln}")
+    if not linked:
+        print("    (none found — save files as shot_<ID>_<anything>.jpg, e.g. shot_003_calm_desk.jpg)")
+    print()
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
@@ -475,6 +522,8 @@ def main():
                         help="Target AI image tool (default: chatgpt)")
     parser.add_argument("--out",    default=None,
                         help="Output folder (default: same folder as project.json)")
+    parser.add_argument("--link",   action="store_true",
+                        help="Attach generated images saved as shot_XXX_*.jpg/png/webp in Assets/Images to their shots")
     args = parser.parse_args()
 
     proj_path = Path(args.project)
@@ -482,7 +531,11 @@ def main():
         sys.exit(f"❌  Not found: {proj_path}")
 
     project      = json.loads(proj_path.read_text(encoding="utf-8-sig"))
-    all_shots    = project["shots"]
+    all_shots    = project.get("shots", [])
+    images_dir   = assets_dir(project, proj_path) / "Images"
+    if args.link:
+        link_images(project, proj_path, images_dir)
+        return
     project_name = project.get("project_name", "My Video")
     video_format = f"{project.get('width', 1080)}x{project.get('height', 1920)}"
     out_dir      = Path(args.out) if args.out else proj_path.parent
@@ -492,11 +545,14 @@ def main():
     if args.all:
         target_statuses.add("pending")
 
+    # Cards (T1/T5) are rendered by the pipeline and product inserts come from screen
+    # recordings — neither ever needs a generated photo.
+    stock_shots = [s for s in all_shots if shot_kind(s) == "stock"]
     if args.shot:
-        shots_to_process = [s for s in all_shots if s["shot_id"] == args.shot]
+        shots_to_process = [s for s in stock_shots if s["shot_id"] == args.shot]
     else:
         shots_to_process = [
-            s for s in all_shots
+            s for s in stock_shots
             if s.get("status", "pending") in target_statuses
             or not s.get("local_file")
         ]
@@ -513,10 +569,12 @@ def main():
     print(f"{'═'*62}\n")
 
     prompts = []
+    index_of = {s["shot_id"]: i for i, s in enumerate(all_shots)}
     for shot in shots_to_process:
-        idx     = all_shots.index(shot)
+        idx     = index_of[shot["shot_id"]]
         arc_pos = get_arc_position(idx, total)
         p       = build_prompt(shot, arc_pos, args.tool, video_format)
+        p["save_folder"] = str(images_dir)
         prompts.append(p)
 
         # Store back in shot
@@ -546,10 +604,11 @@ def main():
     print(f"  NEXT STEPS:")
     print(f"  1. Open prompts_report.html in your browser")
     print(f"  2. Copy each prompt → generate in {args.tool.upper()}")
-    print(f"  3. Save images as shown (shot_XXX_keyword.jpg) into Assets/Images/")
-    print(f"  4. Set Status = downloaded in your Excel sheet for each")
-    print(f"  5. Continue pipeline from Phase 3:")
-    print(f"     python run_pipeline.py story_plan.xlsx --from 3")
+    print(f"  3. Save each image as shown (shot_XXX_keyword.jpg) into:")
+    print(f"     {images_dir}")
+    print(f"  4. Link them to their shots:  python prompt_generator.py {proj_path.name} --link")
+    print(f"  5. Continue the pipeline from Phase 3:")
+    print(f"     python run_pipeline.py {Path(project.get('source_xlsx') or 'story_plan.xlsx').name} --from 3")
     print(f"{'═'*62}\n")
 
 
