@@ -226,6 +226,51 @@ def main():
     check(r2 != 0, f"pipeline stops when shot 004's source is missing (rc={r2})")
     check((final.stat().st_mtime if final.exists() else 0) == before, "final export was not rewritten with a dropped shot")
 
+    print("\n══ U-rated content-safety checks ══")
+    import content_safety as safety
+    first = proj.get("safety_state", {})              # state right after the main run (before the fail-loudly reruns)
+    check(first.get("assets", {}).get("status") == "PASS", f"asset gate PASS ({first.get('assets', {}).get('items')} items)")
+    missing_run = json.loads((d / "project.json").read_text(encoding="utf-8-sig")).get("safety_state", {})
+    check(missing_run.get("assets", {}).get("status") == "FAIL", "asset gate FAILS when a source file is missing")
+    sst = first
+    check(sst.get("final", {}).get("status") == "PASS", f"final-video gate PASS (status {sst.get('final', {}).get('status')})")
+    qa = json.loads((d / "Output" / "qa_report.json").read_text(encoding="utf-8"))
+    check(any(i["area"] == "safety" and "sign-off" in i["message"] for i in qa["findings"]),
+          "QA says DO NOT PUBLISH until a human sign-off is recorded")
+    # A sign-off for the current render is accepted; QA then drops the finding
+    final_sha = safety.file_hash(final)
+    review = d / "safety_review.json"
+    review.write_text(json.dumps({"stage": "final", "policy": safety.POLICY_VERSION, "items": {},
+                                  "signoff": {"video_sha": final_sha, "name": "Selftest Reviewer", "confirmed": ["x"]}}),
+                      encoding="utf-8")
+    ar = subprocess.run([sys.executable, str(HERE / "content_safety.py"), str(d / "project.json"),
+                         "--apply-review", str(review)], capture_output=True, text=True, encoding="utf-8", errors="replace")
+    subprocess.run([sys.executable, str(HERE / "qa_check.py"), str(d / "project.json")], capture_output=True)
+    qa = json.loads((d / "Output" / "qa_report.json").read_text(encoding="utf-8"))
+    check(ar.returncode == 0 and not any(i["area"] == "safety" for i in qa["findings"]),
+          "recorded sign-off clears the publish block")
+    # A sign-off for a different render is refused
+    review.write_text(json.dumps({"stage": "final", "policy": safety.POLICY_VERSION, "items": {},
+                                  "signoff": {"video_sha": "0" * 64, "name": "X", "confirmed": []}}), encoding="utf-8")
+    ar2 = subprocess.run([sys.executable, str(HERE / "content_safety.py"), str(d / "project.json"),
+                          "--apply-review", str(review)], capture_output=True, text=True, encoding="utf-8", errors="replace")
+    check("different render" in ar2.stdout, "sign-off for another render is refused")
+    # Render stages refuse content that was never cleared
+    p2 = json.loads((d / "project.json").read_text(encoding="utf-8-sig"))
+    p2["safety_state"]["cleared"] = {}
+    (d / "project_uncleared.json").write_text(json.dumps(p2, ensure_ascii=False), encoding="utf-8")
+    ov = subprocess.run([sys.executable, str(HERE / "overlay_engine.py"), str(d / "project_uncleared.json"), "--force"],
+                        capture_output=True, text=True, encoding="utf-8", errors="replace")
+    check(ov.returncode != 0 and "not cleared" in ov.stdout, "overlay stage refuses text that was not cleared")
+    # Unsuitable on-screen text stops the run in Phase 1
+    wb = openpyxl.load_workbook(xlsx)
+    wb["Shot Plan"]["M4"] = "Sexy summer deal"
+    bad = d / "story_plan_bad_text.xlsx"
+    wb.save(bad)
+    br = subprocess.run([sys.executable, str(HERE / "story_reader.py"), str(bad), "--out", str(d / "project_bad.json"),
+                         "--fresh"], capture_output=True, text=True, encoding="utf-8", errors="replace")
+    check(br.returncode != 0 and "U audience" in br.stdout, "unsuitable on-screen text stops Phase 1")
+
     print(f"\n{'✅  SELFTEST PASSED' if not fails else '❌  SELFTEST FAILED: ' + str(len(fails)) + ' check(s)'}  (pipeline rc={rc})")
     print(f"   folder: {d}\n")
     if not args.keep and not fails:

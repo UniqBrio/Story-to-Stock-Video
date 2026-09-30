@@ -183,6 +183,7 @@ python run_pipeline.py story_plan.xlsx --from 2 --apply-picks picks.json
 python validation_report.py project.json              # G5: Keep / Swap, Save review.json
 python run_pipeline.py story_plan.xlsx --apply-review review.json   # re-fetch swapped shots, render
 python run_pipeline.py story_plan.xlsx --from 3 --force      # re-render, keep assets
+python run_pipeline.py story_plan.xlsx --apply-safety-review safety_review.json   # U-rated decisions + sign-off
 python selftest.py                                           # synthetic end-to-end check
 ```
 

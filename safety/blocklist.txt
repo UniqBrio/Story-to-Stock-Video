@@ -1,0 +1,188 @@
+# U-rated text blocklist — used for on-screen text, voiceover scripts, captions,
+# OCR'd text in footage and Whisper transcripts of every audio layer.
+#
+# Format:   <level> <category> <term>
+#   level    fail   → blocks the item outright
+#            review → needs a recorded human approval before render / publish
+#   term     Latin terms match whole words, case-insensitive; a trailing * matches any
+#            ending (porn* → porn, porno, pornographic). Phrases are allowed.
+#            Tamil terms match when not glued to other Tamil letters; a trailing *
+#            allows any Tamil ending (கொலை* → கொலைகள்).
+# Add your own terms at the end of this file or in safety/blocklist_extra.txt.
+
+# ── Sexual / adult ────────────────────────────────────────────────────────────
+fail sexual sex
+fail sexual sexy
+fail sexual sexual*
+fail sexual porn*
+fail sexual nude*
+fail sexual nudity
+fail sexual naked
+fail sexual erotic*
+fail sexual xxx
+fail sexual nsfw
+fail sexual horny
+fail sexual orgasm*
+fail sexual boob*
+fail sexual tits
+fail sexual titties
+fail sexual penis*
+fail sexual vagina*
+fail sexual genital*
+fail sexual masturbat*
+fail sexual brothel*
+fail sexual prostitut*
+fail sexual hooker*
+fail sexual stripper*
+fail sexual strip club
+fail sexual striptease
+fail sexual lingerie
+fail sexual bikini*
+fail sexual thong*
+fail sexual onlyfans
+fail sexual milf
+fail sexual hentai
+fail sexual fetish*
+fail sexual bdsm
+fail sexual seduc*
+fail sexual one night stand
+fail sexual hot girls
+fail sexual escort service*
+review sexual kiss*
+review sexual lust*
+review sexual intimate
+review sexual cleavage
+review sexual underwear
+review sexual swimsuit*
+review sexual swimwear
+review sexual dating
+fail sexual rape*
+fail sexual molest*
+
+# ── Profanity ────────────────────────────────────────────────────────────────
+fail profanity fuck*
+fail profanity f*ck
+fail profanity motherfuck*
+fail profanity shit*
+fail profanity bullshit
+fail profanity bitch*
+fail profanity bastard*
+fail profanity asshole*
+fail profanity cunt*
+fail profanity dickhead*
+fail profanity wanker*
+fail profanity bollock*
+fail profanity slut*
+fail profanity whore*
+review profanity damn*
+review profanity crap*
+review profanity wtf
+review profanity hell
+review profanity piss*
+review profanity stupid
+review profanity idiot*
+
+# ── Hate / slurs (extend in blocklist_extra.txt for your region) ─────────────
+fail hate nigger*
+fail hate nigga*
+fail hate faggot*
+fail hate retard*
+fail hate tranny
+review hate racist*
+
+# ── Violence / self-harm / weapons ───────────────────────────────────────────
+fail violence suicid*
+fail violence self harm
+fail violence self-harm
+fail violence kill yourself
+fail violence behead*
+fail violence terroris*
+review violence kill*
+review violence murder*
+review violence stab
+review violence stabbed
+review violence stabbing
+review violence gun*
+review violence pistol*
+review violence rifle*
+review violence bomb*
+review violence blood*
+review violence gore
+review violence torture*
+review violence weapon*
+review violence knife
+review violence knives
+review violence die
+review violence dead body
+
+# ── Drugs / alcohol / smoking / gambling ─────────────────────────────────────
+fail drugs cocaine
+fail drugs heroin
+fail drugs meth
+review drugs drug*
+review drugs weed
+review drugs marijuana
+review drugs ganja
+review drugs cannabis
+review drugs alcohol*
+review drugs beer*
+review drugs wine*
+review drugs whisky
+review drugs whiskey
+review drugs vodka
+review drugs rum
+review drugs liquor
+review drugs drunk*
+review drugs booze
+review drugs cigarette*
+review drugs cigar*
+review drugs smoking
+review drugs vape*
+review drugs vaping
+review drugs tobacco
+review drugs gutka
+review drugs gambl*
+review drugs betting
+review drugs casino*
+
+# ── Tamil (தமிழ்) ─────────────────────────────────────────────────────────────
+fail sexual செக்ஸ்*
+fail sexual ஆபாச*
+fail sexual நிர்வாண*
+fail sexual உடலுறவு*
+fail sexual விபச்சார*
+fail sexual கற்பழி*
+fail sexual பாலியல் வன்*
+review sexual பாலியல்*
+review sexual காமம்
+review sexual காமவெறி*
+review sexual நீச்சலுடை*
+fail profanity ஓத்தா*
+fail profanity ஓழ்*
+fail profanity புண்டை*
+fail profanity சுன்னி*
+fail profanity தேவடியா*
+fail profanity கூதி*
+fail violence தற்கொலை*
+review violence கொலை*
+review violence துப்பாக்கி*
+review violence வெடிகுண்டு*
+review violence இரத்தம்*
+review violence ரத்தம்*
+review drugs மது
+review drugs மதுபான*
+review drugs சாராய*
+review drugs போதை*
+review drugs கஞ்சா*
+review drugs சிகரெட்*
+review drugs புகைபிடி*
+review drugs சூதாட்ட*
+
+# ── Tanglish (Tamil in Latin letters) ────────────────────────────────────────
+fail profanity otha
+fail profanity oththa
+fail profanity thevidiya*
+fail profanity thevdiya*
+fail profanity punda*
+fail profanity koothi*
+fail profanity sunni

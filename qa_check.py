@@ -11,6 +11,7 @@ writes Output/qa_report.md + qa_report.json + Output/qa/frame_*.jpg.
   Sound       : dead air > 1.5 s
   Complete    : every planned shot is in the timeline · no shot left in error/swap
   Fonts       : no FFmpeg-default font · Tamil text in a Tamil font and shaped · brand font used
+  Safety      : exported video passed the U-rated check · human sign-off recorded for this exact render
   Story rules : hook in ≤ 1.5 s · restraint budget (README §2) · reading-time minimums ·
                 single CTA · brand linkage (T5 card or bug) · safe zones on · license log complete
   Manual      : sound-off comprehension · phone viewing — listed as reminders, never auto-passed
@@ -148,6 +149,26 @@ def main():
     for s in project["shots"]:
         if s.get("status") in ("error", "swap"):
             R.add("critical", "completeness", f"{s['shot_id']}: asset status '{s['status']}' — no approved asset")
+
+    # ── Content safety (U-rated) ──────────────────────────────────────────────
+    import content_safety as safety
+    sst = project.get("safety_state", {})
+    fin = sst.get("final", {})
+    cur_sha = safety.file_hash(final)
+    if not fin or fin.get("video_sha") != cur_sha:
+        R.add("critical", "safety", "The exported video has not passed the U-rated content check "
+                                    "(python content_safety.py project.json --stage final)")
+    elif fin.get("status") == "FAIL":
+        R.add("critical", "safety", f"U-rated check FAILED ({fin.get('fails')} item(s)) — see {fin.get('report')}")
+    elif fin.get("status") == "REVIEW":
+        R.add("critical", "safety", f"{fin.get('reviews')} item(s) await your U-rated decision — see {fin.get('report')}")
+    so = sst.get("signoff", {})
+    if not so or so.get("video_sha") != cur_sha:
+        R.add("major", "safety", "No human U-rated sign-off recorded for this render — DO NOT PUBLISH until it is "
+                                 "recorded (Output/safety/final_report.html → Save safety_review.json → "
+                                 "run_pipeline --apply-safety-review)")
+    for k, o in sst.get("overrides", {}).items():
+        R.add("minor", "safety", f"Safety override {k}: {o.get('reason')}")
 
     # ── Loudness ──────────────────────────────────────────────────────────────
     loud = ebur128(final)
@@ -289,6 +310,9 @@ def main():
            "- [ ] **Redmi-class phone**: speaker + screen, sound OFF first, then ON",
            "- [ ] **Brand linkage**: could a competitor swap the logo and publish this unchanged? (must be NO)",
            "- [ ] **Asset ↔ narration alignment** per shot (Indian context, no Western office stock)",
+           "- [ ] **U-rated**: watched the whole video with sound ON — nothing sexual, revealing, violent, "
+           "drug/alcohol-related or otherwise unsuitable for children; swimwear-type subjects are cartoon-only; "
+           "sign-off recorded in `Output/safety/final_report.html`",
            "", f"Frames: {', '.join(Path(f).name for f in frames)}"]
     (out_dir / "qa_report.md").write_text("\n".join(md), encoding="utf-8")
     (out_dir / "qa_report.json").write_text(json.dumps({

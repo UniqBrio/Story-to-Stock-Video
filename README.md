@@ -10,7 +10,9 @@ mixing, export and an automated QA pass.
 - [FFmpeg](https://ffmpeg.org/) and `ffprobe` on your `PATH` — a current **full** build with
   libfreetype and HarfBuzz (on Windows, the gyan.dev "full" build). FFmpeg 6.1 misspells Tamil
   overlays by drawing vowel signs such as ை on the wrong side. Preflight checks this for you.
-- `pip install -r requirements.txt` (openpyxl, Pillow)
+- `pip install -r requirements.txt` (openpyxl, Pillow, and the local content-safety packages)
+- `python content_safety.py --setup` once. It downloads and checksum-verifies about 1 GB of local models:
+  CLIP ViT-B/32 (ONNX) and Whisper small (sherpa-onnx). NudeNet and RapidOCR ship inside their pip packages.
 - Fonts: Inter and Noto Sans Tamil ship in `fonts/` (SIL OFL) and are used before any system font
 
 ## Setup
@@ -84,6 +86,61 @@ A swapped asset is recorded per shot and never offered again. If stock can't fil
 
 Other utilities: `bgm_prompt_generator.py` writes a BGM brief from the story arc.
 
+## U-rated content safety (mandatory)
+
+Every picture, video frame, text, voiceover and caption must be suitable for children before it is
+rendered, and the finished video must pass again and carry a recorded human sign-off before it is published.
+Everything runs on your machine; nothing is uploaded.
+
+| What | How it is checked |
+|---|---|
+| Stock clips, AI images, your screen recordings, the logo | CLIP detects nudity, swimwear and revealing clothing, weapons, violence, alcohol, drugs, smoking and horror. NudeNet gives a second opinion on nudity. RapidOCR reads any text in the frame. |
+| On-screen text, VO script lines, captions (`captions_path`) | `safety/blocklist.txt` in English, Tamil and Tanglish. Add your own terms in `safety/blocklist_extra.txt`. |
+| Voiceover, music, BGM, sting, final mix | Whisper transcribes the audio and the transcript goes through the same text check |
+| Finished video | Every shot is re-checked frame by frame, plus the full audio and all rendered text |
+
+Each item gets **PASS**, **REVIEW** or **FAIL**:
+
+- **PASS** is cleared.
+- **REVIEW** needs your approval in the report.
+- **FAIL** must be replaced. Stock clips that fail are rejected automatically and re-fetched on `--from 2`.
+  Only `python content_safety.py project.json --override KEY --reason "..."` can clear a FAIL, and it is logged.
+
+The render stages refuse any file or text that has not been cleared.
+
+**Swimwear-type subjects are cartoon-only.** A shot about swimming, swimwear, bikinis, beaches, pools,
+water polo or surfing is marked cartoon-only in phase 1. For such a shot:
+
+- the fetcher searches only Pixabay illustrations and animations;
+- AI prompts ask for a children's-cartoon style;
+- any real photo or real face fails the check.
+
+Change the subject list with the `illustration_only_subjects` setting, or force a shot with the
+optional **Visual Style** column (`illustration`).
+
+The workflow:
+
+```bash
+python run_pipeline.py story_plan.xlsx               # the asset gate runs before Phase 3, the final gate after Phase 7
+#   open Output/safety/assets_report.html or final_report.html → Approve / Reject → "Save safety_review.json"
+python run_pipeline.py story_plan.xlsx --apply-safety-review safety_review.json --from 3
+#   final report: tick the three checks, enter your name → Save → apply it the same way
+python content_safety.py project.json --status       # is the current render signed off?
+```
+
+QA marks the video **FIX BEFORE G6** while any safety item is open. It says **do not publish** until the
+sign-off matches this exact render, checked by SHA-256.
+
+Settings (Project Settings sheet): `vo_language` (auto / en / ta), `captions_path`,
+`illustration_only_subjects`, `safety_models_dir`, `safety_frames_per_second`.
+
+Known limits:
+
+- **Tamil speech.** Whisper small's Tamil transcripts are approximate, so the report asks you to listen before signing off.
+- **Text inside frames.** OCR reads English and numbers, not Tamil.
+- **Celebrities.** No local model can recognise them. Cartoon-only shots instead reject every real face.
+- **Calibration.** The thresholds were set on a small labelled set, documented in the audit. The human sign-off stays mandatory for this reason.
+
 ## Self-test
 
 ```bash
@@ -96,6 +153,9 @@ keys needed. The offline fetcher and review-loop tests run with:
 ```bash
 python -m unittest discover -s tests
 ```
+
+The self-test also exercises the safety gates and the sign-off rules. It needs the models from
+`python content_safety.py --setup`.
 
 For the self-test: Set `SVOS_LOGO_PATH` (or place `assets/logo.png`) to use your own logo;
 otherwise a plain wordmark is generated.

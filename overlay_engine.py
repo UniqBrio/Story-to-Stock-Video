@@ -269,6 +269,18 @@ def main():
     out_file = Path(assembled).parent / "assembled_with_overlays.mp4"
     tw, th = project.get("width", 1080), project.get("height", 1920)
 
+    # U-rated gate: every on-screen text and the logo must have passed the content-safety check
+    import content_safety as safety
+    blocked = [f"{s['shot_id']}: {safety.require_text(project, s['text_overlay'])}" for s in project["shots"]
+               if (s.get("text_overlay") or "").strip() and shot_kind(s) != "product"
+               and safety.require_text(project, s["text_overlay"])]
+    lp = project.get("logo", {}).get("path", "")
+    if lp and Path(lp).exists() and safety.require_media(project, lp):
+        blocked.append(f"logo: {safety.require_media(project, lp)}")
+    if blocked:
+        print("  🛡   Not rendered — content not cleared:\n" + "\n".join(f"     • {b}" for b in blocked))
+        sys.exit(1)
+
     timeline = project.get("timeline") or compute_timeline(project["shots"])
     filters, manifest, audit = build_overlays(project, timeline)
     audit += restraint_audit(project, manifest)

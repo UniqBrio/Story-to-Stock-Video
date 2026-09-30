@@ -352,8 +352,8 @@ def _slug_text(page_url: str) -> str:
     return m.group(1).replace("-", " ") if m else ""
 
 
-def search_pexels_videos(query, key, per_page, tw, th, rank, orient=True):
-    if not key:
+def search_pexels_videos(query, key, per_page, tw, th, rank, orient=True, illu=False):
+    if not key or illu:
         return []
     url = f"{PEXELS_VIDEO_URL}?query={urllib.parse.quote(query)}&per_page={per_page}"
     if orient:
@@ -370,11 +370,11 @@ def search_pexels_videos(query, key, per_page, tw, th, rank, orient=True):
     return out
 
 
-def search_pixabay_videos(query, key, per_page, tw, th, rank, orient=True):
+def search_pixabay_videos(query, key, per_page, tw, th, rank, orient=True, illu=False):
     if not key:
         return []
     url = (f"{PIXABAY_VIDEO_URL}?key={key}&q={urllib.parse.quote(query)}"
-           f"&per_page={max(3, per_page)}&video_type=film&safesearch=true")
+           f"&per_page={max(3, per_page)}&video_type={'animation' if illu else 'film'}&safesearch=true")
     data, _ = _api_get("pixabay", url, secret=key)
     out = []
     for pos, hit in enumerate((data or {}).get("hits", [])):
@@ -392,8 +392,8 @@ def search_pixabay_videos(query, key, per_page, tw, th, rank, orient=True):
     return out
 
 
-def search_pexels_images(query, key, per_page, tw, th, rank, orient=True):
-    if not key:
+def search_pexels_images(query, key, per_page, tw, th, rank, orient=True, illu=False):
+    if not key or illu:
         return []
     url = f"{PEXELS_IMAGE_URL}?query={urllib.parse.quote(query)}&per_page={per_page}"
     if orient:
@@ -411,11 +411,11 @@ def search_pexels_images(query, key, per_page, tw, th, rank, orient=True):
     return out
 
 
-def search_pixabay_images(query, key, per_page, tw, th, rank, orient=True):
+def search_pixabay_images(query, key, per_page, tw, th, rank, orient=True, illu=False):
     if not key:
         return []
     url = (f"{PIXABAY_IMAGE_URL}?key={key}&q={urllib.parse.quote(query)}"
-           f"&per_page={max(3, per_page)}&image_type=photo&safesearch=true")
+           f"&per_page={max(3, per_page)}&image_type={'illustration' if illu else 'photo'}&safesearch=true")
     if orient:
         url += f"&orientation={'vertical' if th > tw else 'horizontal'}"
     data, _ = _api_get("pixabay", url, secret=key)
@@ -428,10 +428,10 @@ def search_pixabay_images(query, key, per_page, tw, th, rank, orient=True):
     return out
 
 
-def search_unsplash_images(query, key, per_page, tw, th, rank, orient=True):
-    if not key:
+def search_unsplash_images(query, key, per_page, tw, th, rank, orient=True, illu=False):
+    if not key or illu:
         return []
-    url = f"{UNSPLASH_IMAGE_URL}?query={urllib.parse.quote(query)}&per_page={per_page}"
+    url = f"{UNSPLASH_IMAGE_URL}?query={urllib.parse.quote(query)}&per_page={per_page}&content_filter=high"
     if orient:
         url += f"&orientation={'portrait' if th > tw else 'landscape'}"
     data, _ = _api_get("unsplash", url, {"Authorization": f"Client-ID {key}"})
@@ -472,6 +472,7 @@ def _search(shot, queries, keys, tw, th, per_query, exclude, used_authors, ladde
     want_video = priority in ("video_first", "video_only")
     want_image = priority in ("image_first", "image_only", "video_first")
     shot_dur = float(shot.get("duration", 4.0))
+    illu = bool(shot.get("illustration_only"))           # swimwear-type subject: cartoons / animation only
     seen, cands = set(), []
 
     def add(lst):
@@ -491,14 +492,14 @@ def _search(shot, queries, keys, tw, th, per_query, exclude, used_authors, ladde
 
     for rank, q in enumerate(queries):
         if want_video:
-            add(search_pexels_videos(q, keys.get("pexels", ""), per_query, tw, th, rank, orient))
-            add(search_pixabay_videos(q, keys.get("pixabay", ""), per_query, tw, th, rank, orient))
+            add(search_pexels_videos(q, keys.get("pexels", ""), per_query, tw, th, rank, orient, illu))
+            add(search_pixabay_videos(q, keys.get("pixabay", ""), per_query, tw, th, rank, orient, illu))
     have_good_video = any(c["type"] == "video" and c["score"] >= 60 for c in cands)
     if want_image and (priority in ("image_first", "image_only") or not have_good_video):
         for rank, q in enumerate(queries):
-            add(search_pexels_images(q, keys.get("pexels", ""), per_query, tw, th, rank, orient))
-            add(search_pixabay_images(q, keys.get("pixabay", ""), per_query, tw, th, rank, orient))
-            add(search_unsplash_images(q, keys.get("unsplash", ""), per_query, tw, th, rank, orient))
+            add(search_pexels_images(q, keys.get("pexels", ""), per_query, tw, th, rank, orient, illu))
+            add(search_pixabay_images(q, keys.get("pixabay", ""), per_query, tw, th, rank, orient, illu))
+            add(search_unsplash_images(q, keys.get("unsplash", ""), per_query, tw, th, rank, orient, illu))
 
     if priority == "video_only":
         cands = [c for c in cands if c["type"] == "video"]
@@ -556,6 +557,40 @@ def reject_current(shot: dict, status: str = "swap") -> bool:
     return had
 
 
+# ── Content safety (U-rated) ─────────────────────────────────────────────────
+def safety_screen(shot: dict, path: Path, ocr: bool = True) -> tuple[str, list]:
+    """Local-model screen of one download or thumbnail → (PASS | REVIEW | FAIL, reasons)."""
+    import content_safety as safety
+    window = (float(shot.get("trim_in", 0) or 0), float(shot.get("duration", 4.0))) \
+        if infer_asset_type(str(path)) == "video" else None
+    r = safety.screen_file(Path(path), bool(shot.get("illustration_only")), window, _cfg.get("models_dir"), ocr=ocr)
+    return r["status"], r["reasons"]
+
+
+def _remember_rejection(shot: dict, c: dict, reasons: list) -> None:
+    k = asset_key(c["source"], c["type"], c["id"])
+    shot.setdefault("rejected_ids", [])
+    if k not in shot["rejected_ids"]:
+        shot["rejected_ids"].append(k)
+    shot.setdefault("safety_rejections", []).append({"asset": k, "reasons": reasons[:4], "at": datetime.now().isoformat(timespec="seconds")})
+
+
+def fetch_and_screen(shot: dict, c: dict, afolder: Path, allow_review: bool) -> str:
+    """Download → screen. Returns ok | review | fail | download (a REVIEW asset is kept only if allow_review)."""
+    if not download_candidate(shot, c, afolder):
+        return "download"
+    path = Path(shot["local_file"])
+    status, reasons = safety_screen(shot, path)
+    if status == "PASS" or (status == "REVIEW" and allow_review):
+        shot["safety_screen"] = {"status": status, "reasons": reasons[:4]}
+        return "ok" if status == "PASS" else "review"
+    print(f"    🛡   {shot['shot_id']} — {c['source']}#{c['id']} {status}: {'; '.join(reasons[:2])} — discarded, never offered again")
+    path.unlink(missing_ok=True)
+    reject_current(shot, "error")
+    _remember_rejection(shot, c, reasons)
+    return "fail"
+
+
 def download_candidate(shot: dict, c: dict, afolder: Path) -> bool:
     sub = "Videos" if c["type"] == "video" else "Images"
     ext = ".mp4" if c["type"] == "video" else ".jpg"
@@ -581,6 +616,37 @@ def download_candidate(shot: dict, c: dict, afolder: Path) -> bool:
     return True
 
 
+def screen_thumbnails(shot: dict, cands: list, afolder: Path, want: int) -> list:
+    """Contact sheet: screen each candidate's preview; FAIL is hidden, REVIEW is badged."""
+    out, cache, hidden = [], afolder / "_cache" / "thumbs", 0
+    cache.mkdir(parents=True, exist_ok=True)
+    for c in cands:
+        if len(out) >= want:
+            break
+        if not c.get("thumb"):
+            c["safety"] = "unchecked"
+            out.append(c)
+            continue
+        tp = cache / f"{c['source']}_{c['type']}_{c['id']}.jpg"
+        try:
+            if not tp.exists():
+                with urllib.request.urlopen(urllib.request.Request(c["thumb"], headers={"User-Agent": UA}), timeout=20) as r:
+                    tp.write_bytes(r.read())
+            status, reasons = safety_screen(shot, tp, ocr=False)
+        except Exception as e:
+            status, reasons = "REVIEW", [f"preview could not be checked ({e})"]
+        if status == "FAIL":
+            _remember_rejection(shot, c, reasons)
+            hidden += 1
+            continue
+        c["safety"] = status.lower()
+        c["safety_reasons"] = reasons[:3]
+        out.append(c)
+    if hidden:
+        print(f"    🛡   {shot['shot_id']} — hid {hidden} candidate(s) that failed the U-rated check")
+    return out
+
+
 # ── Contact sheet (G4) ────────────────────────────────────────────────────────
 def write_contact_sheet(project: dict, per_shot: dict, out_path: Path, xlsx_name: str = "story_plan.xlsx"):
     name = html.escape(project.get("project_name", "My Video"))
@@ -596,6 +662,9 @@ def write_contact_sheet(project: dict, per_shot: dict, out_path: Path, xlsx_name
             dur = f"{c['duration']:.1f}s" if c["duration"] else "still"
             also = (f'<span class="warn">also offered for shot {", ".join(html.escape(x) for x in c["also_in"])}</span>'
                     if c.get("also_in") else "")
+            if c.get("safety") == "review":
+                also += (f'<span class="warn">🛡 needs a safety review: '
+                         f'{html.escape("; ".join(c.get("safety_reasons", [])))}</span>')
             rows += f"""
             <label class="cand">
               <input type="radio" name="pick_{html.escape(sid)}" value="{i}" {'checked' if i == 0 else ''}
@@ -616,7 +685,7 @@ def write_contact_sheet(project: dict, per_shot: dict, out_path: Path, xlsx_name
           <header><span class="sid">SHOT {html.escape(sid)}</span>
             <span class="desc">{html.escape(shot.get('scene_desc',''))}</span>
             <span class="dur">⏱ {shot.get('duration')}s · {html.escape(shot.get('treatment','T2'))}</span></header>
-          <div class="kw">{' · '.join(html.escape(k) for k in shot.get('keywords', []))}</div>
+          <div class="kw">{' · '.join(html.escape(k) for k in shot.get('keywords', []))}{' · <b style="color:#e67e22">cartoon / illustration only</b>' if shot.get('illustration_only') else ''}</div>
           <div class="grid">{rows}</div>
           <label class="skip"><input type="checkbox" name="skip_{html.escape(sid)}" onchange="update()"> reject all — send shot back to storyboard</label>
         </section>"""
@@ -777,6 +846,15 @@ def main():
     tw, th = project.get("width", 1080), project.get("height", 1920)
     afolder = assets_dir(project, proj_path)
     configure(project.get("fetch"), afolder / "_cache" / "api")
+    import content_safety as safety
+    _cfg["models_dir"] = safety.models_dir(project)
+    needs_fetch = any(shot_kind(s) == "stock" for s in project["shots"])
+    if needs_fetch:
+        blockers = safety.readiness(project)
+        if blockers:
+            for b in blockers:
+                print(f"❌  {b}")
+            sys.exit("❌  Content safety is mandatory: every download is screened before it can be used.")
     _cfg["unsplash_key"] = keys["unsplash"]
 
     if args.shot and not any(s["shot_id"] == args.shot for s in project["shots"]):
@@ -877,16 +955,20 @@ def main():
                 shot["status"] = "swap"
                 errors += 1
                 continue
-            if download_candidate(shot, c, afolder):
+            res = fetch_and_screen(shot, c, afolder, allow_review=True)
+            if res in ("ok", "review"):
                 picked_by[k] = sid
                 shot["approved"] = True
                 ok += 1
+                if res == "review":
+                    print(f"    ⚠️  {sid} — kept, but the content-safety gate will ask you to approve it before rendering")
             else:
-                shot["status"] = "error"; errors += 1
+                shot["status"] = "swap" if res == "fail" else "error"; errors += 1
         else:
             per_query = max(3, args.candidates) if args.candidates else 5
             cands = gather_candidates(shot, keys, tw, th, per_query, exclude, used_authors)
             if args.candidates:
+                cands = screen_thumbnails(shot, cands, afolder, args.candidates)
                 per_shot_candidates[sid] = cands[:args.candidates]
                 print(f"    🔎  {sid} — {len(cands)} candidates ({sum(1 for c in cands if c['type']=='video')} video)")
                 continue
@@ -894,15 +976,20 @@ def main():
                 print(f"    ❌  {sid} — no suitable asset for {shot.get('keywords', [])[:3]}")
                 shot["status"] = "error"; errors += 1
                 continue
-            downloaded = False
-            for c in cands[:3]:                       # fall through to the next best on a dead link
-                if download_candidate(shot, c, afolder):
+            downloaded, screened_out = False, 0
+            for c in cands[:6]:                       # next best on a dead link or a content-safety reject
+                res = fetch_and_screen(shot, c, afolder, allow_review=False)
+                if res == "ok":
                     downloaded = True
                     break
+                screened_out += res == "fail"
             if downloaded:
                 ok += 1
             else:
                 shot["status"] = "error"; errors += 1
+                if screened_out:
+                    print(f"    ❌  {sid} — {screened_out} candidate(s) failed the U-rated check; rewrite the keywords"
+                          + (" (cartoon-only shot: try 'cartoon', 'illustration', 'animated')" if shot.get("illustration_only") else ""))
 
         log_rows.append([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), sid, shot.get("scene_desc", "")[:50],
                          shot.get("source", ""), shot.get("asset_url", ""), shot.get("local_file", ""),

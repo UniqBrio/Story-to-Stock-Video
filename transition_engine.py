@@ -166,6 +166,19 @@ def main():
 
     banner("Transition Engine", f"{len(project['shots'])} shots → {out_file}")
 
+    # U-rated gate: never assemble a clip whose source is no longer cleared (e.g. rejected after it was normalised)
+    import content_safety as safety
+    from svos_common import shot_kind
+    blocked = []
+    for s in project["shots"]:
+        lf = s.get("local_file", "")
+        if shot_kind(s) in ("stock", "product") and lf and Path(lf).exists():
+            why = safety.require_media(project, lf, bool(s.get("illustration_only")), safety.media_window(s))
+            if why:
+                blocked.append(f"{s['shot_id']}: {why}")
+    if blocked:
+        sys.exit("  🛡   Not assembled — content not cleared:\n" + "\n".join(f"     • {b}" for b in blocked))
+
     clips = collect_clips(project)
     if not clips:
         sys.exit("  ❌  No clips to assemble — run clip_normaliser.py first")

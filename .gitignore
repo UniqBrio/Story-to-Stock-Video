@@ -26,3 +26,6 @@ _selftest/
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# --- Local model weights (python content_safety.py --setup) ---
+.models/

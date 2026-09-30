@@ -72,6 +72,11 @@ class Base(unittest.TestCase):
     def setUp(self):
         self.work = Path(tempfile.mkdtemp(dir=self.tmp))
         af.configure({}, self.work / "cache")
+        # Content-safety screening is tested in test_safety.py; here every download passes unless a test says otherwise
+        self.screen = mock.patch.object(af, "safety_screen", return_value=("PASS", []))
+        self.ready = mock.patch("content_safety.readiness", return_value=[])
+        self.screen.start(); self.ready.start()
+        self.addCleanup(self.screen.stop); self.addCleanup(self.ready.stop)
 
 
 class RenditionAndScoring(Base):
@@ -250,6 +255,47 @@ class ReviewLoop(Base):
         picks = self.work / "picks.json"
         picks.write_text("{not json")
         self.assertNotEqual(run_main(str(p), "--apply-picks", str(picks)), 0)
+
+
+class SafetyInFetcher(Base):
+    def test_unsafe_download_is_discarded_and_next_candidate_used(self):
+        p = make_project(self.work, n=1)
+        routes = {"teacher 1": [pexels_video(11, "teacher one"), pexels_video(12, "teacher two", author="Ben")]}
+        verdicts = iter([("FAIL", ["swimwear 0.91"]), ("PASS", [])])
+        with mock.patch.object(af, "_http_json", FakeAPI(routes)), \
+                mock.patch.object(af, "_download", fake_download_factory(self.clip)), \
+                mock.patch.object(af, "safety_screen", side_effect=lambda *a, **k: next(verdicts)):
+            self.assertEqual(run_main(str(p)), 0)
+        shot = json.loads(p.read_text())["shots"][0]
+        self.assertEqual(shot["asset_id"], "12")
+        self.assertIn("pexels:video:11", shot["rejected_ids"])
+        self.assertEqual(shot["safety_rejections"][0]["reasons"], ["swimwear 0.91"])
+
+    def test_review_download_is_not_auto_picked(self):
+        p = make_project(self.work, n=1)
+        routes = {"teacher 1": [pexels_video(11, "teacher one")]}
+        with mock.patch.object(af, "_http_json", FakeAPI(routes)), \
+                mock.patch.object(af, "_download", fake_download_factory(self.clip)), \
+                mock.patch.object(af, "safety_screen", return_value=("REVIEW", ["possible alcohol 0.4"])):
+            self.assertEqual(run_main(str(p)), 2)
+
+    def test_cartoon_only_shot_searches_only_illustrations(self):
+        shot = {"shot_id": "001", "keywords": ["kids swimming race"], "scene_desc": "", "duration": 4,
+                "asset_priority": "video_first", "illustration_only": True}
+        seen = []
+        def api(url, headers=None, timeout=20):
+            seen.append(url)
+            return {"hits": [], "videos": [], "photos": [], "results": []}, None, None
+        with mock.patch.object(af, "_http_json", api), contextlib.redirect_stdout(io.StringIO()):
+            af.gather_candidates(shot, {"pexels": "k", "pixabay": "k", "unsplash": "k"}, TW, TH, 5, set())
+        self.assertTrue(seen)
+        self.assertFalse([u for u in seen if "pexels" in u or "unsplash" in u])
+        self.assertTrue(all("video_type=animation" in u or "image_type=illustration" in u for u in seen))
+
+    def test_missing_models_stop_the_fetch(self):
+        p = make_project(self.work, n=1)
+        with mock.patch("content_safety.readiness", return_value=["models missing"]):
+            self.assertNotEqual(run_main(str(p)), 0)
 
 
 class CarryForward(Base):

@@ -143,6 +143,15 @@ TOOL_FORMAT = {
     "firefly":    "Paste into Adobe Firefly (firefly.adobe.com)",
 }
 
+# U-rated: every generated image must be suitable for children (content_safety.py checks it again)
+U_RATED_NEGATIVE = (
+    "nudity, partial nudity, revealing clothing, low-cut top, cleavage, bikini, lingerie, underwear, "
+    "suggestive pose, sexualised, alcohol, beer, wine, cigarette, smoking, drugs, weapon, gun, knife, violence, "
+    "blood, gore, horror, celebrity, famous person, real person likeness"
+)
+U_RATED_POSITIVE = "family-friendly and suitable for children (U-rated)"
+U_RATED_PEOPLE = "fully clothed in modest, age-appropriate attire; " + U_RATED_POSITIVE
+
 NEGATIVE_BASE = (
     "blurry, out of focus, watermark, text overlay, logo, "
     "deformed hands, extra fingers, bad anatomy, distorted face, "
@@ -191,15 +200,24 @@ def build_prompt(shot: dict, arc_pos: str, tool: str, video_format: str) -> dict
     text_l      = f"{scene_desc} {keyword_str}".lower()
     has_human   = any(re.search(rf"\b{w}s?\b", text_l) for w in human_words)
 
-    if has_human:
+    illustration = bool(shot.get("illustration_only"))
+    if illustration:
+        # Swimwear-type subject: cartoon only, no real people, modest full-coverage swimwear
+        subject_block = (
+            f"A stylised 2D cartoon illustration, like a frame from a children's animated series, of "
+            f"{scene_desc.lower()}. Clearly drawn cartoon characters, not photorealistic, no real people and no "
+            f"celebrity or real-person likeness; any swimwear is modest and full-coverage "
+            f"(full-body swimsuit or rash guard); {U_RATED_POSITIVE}"
+        )
+    elif has_human:
         subject_block = (
             f"A South Indian person, natural warm medium-brown skin tone, "
             f"authentic expression showing {look['mood'].split(',')[0].strip()}, "
             f"realistic human proportions, natural body language, "
-            f"{scene_desc.lower()}"
+            f"{scene_desc.lower()}; {U_RATED_PEOPLE}; an ordinary, non-famous person"
         )
     else:
-        subject_block = scene_desc
+        subject_block = f"{scene_desc}; {U_RATED_POSITIVE}"
 
     # Build full prompt
     prompt_lines = [
@@ -220,21 +238,31 @@ def build_prompt(shot: dict, arc_pos: str, tool: str, video_format: str) -> dict
         f"Color grade: {look['color']}. Mood: {look['mood']}",
 
         # 6. Style
-        "Style: photorealistic cinematic photograph, film still quality, "
-        "authentic Indian context, no stock photo feel, natural and raw",
+        ("Style: clean flat cartoon illustration, bold friendly shapes, soft colours, 2D animation frame, "
+         "authentic Indian context, suitable for children"
+         if illustration else
+         "Style: photorealistic cinematic photograph, film still quality, "
+         "authentic Indian context, no stock photo feel, natural and raw"),
 
         # 7. Quality
-        "Quality: 8K ultra-detailed, sharp focus, professional colour grading, "
-        "masterpiece, award-winning photography",
+        ("Quality: crisp clean line art, high resolution, consistent character design"
+         if illustration else
+         "Quality: 8K ultra-detailed, sharp focus, professional colour grading, "
+         "masterpiece, award-winning photography"),
     ]
 
     # Negative prompt
-    negative = NEGATIVE_BASE
+    negative = (NEGATIVE_BASE.replace("cartoon, illustration, anime, painting, ", "")
+                + ", photorealistic, photograph, real person, realistic skin") if illustration else NEGATIVE_BASE
+    negative += ", " + U_RATED_NEGATIVE
     if has_human:
         negative += ", ugly, mutated, cloned face, unrealistic eyes, plastic skin"
 
     prompt_text = ". ".join(prompt_lines)
 
+    if illustration:
+        suffix = re.sub(r"(?i)photorealistic(, cinematic quality)?|photorealistic cinematic photograph|cinematic lighting",
+                        "cartoon illustration", suffix)
     # Add tool suffix
     if tool == "midjourney":
         full_prompt = f"{prompt_text} --no {negative} {suffix}"

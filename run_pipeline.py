@@ -15,7 +15,9 @@ Phases:
     5  overlay_engine      Text overlays (styles · motion · safe zones · Tamil) + logo
     6  audio_mixer         VO duck map · music · BGM · sting · loudness normalise
     7  final_export        H.264 High · BT.709 · cover frame · render manifest
+       content_safety      U-rated gate on every asset, text and audio layer — runs before Phase 3
     8  qa_check            Automated G6 battery → Output/qa_report.md
+       content_safety      U-rated gate on the exported video — runs after Phase 7
 
 Optional utilities (run with --only):
     9  validation_report   Review downloaded assets side-by-side (before phase 3)
@@ -34,6 +36,8 @@ Options:
     --shot ID         Phase 3 only: normalise a single shot
     --contact-sheet N Stage-4 gate: run phase 1, gather N candidates/shot → contact_sheet.html, STOP for G4
     --apply-picks F   Download the G4 picks from F (picks.json), then continue with phases 3–8
+    --apply-safety-review F  Apply approve/reject decisions and the sign-off saved from
+                      Output/safety/*_report.html (safety_review.json)
     --apply-review F  Apply keep/swap verdicts saved from validation_report.html (review.json),
                       re-fetch the swapped shots, then continue with phases 3–8
 
@@ -123,6 +127,7 @@ def main():
     ap.add_argument("--contact-sheet", type=int, default=0, metavar="N")
     ap.add_argument("--apply-picks", default=None, metavar="PICKS_JSON")
     ap.add_argument("--apply-review", default=None, metavar="REVIEW_JSON")
+    ap.add_argument("--apply-safety-review", default=None, metavar="SAFETY_REVIEW_JSON")
     args = ap.parse_args()
 
     xlsx_path = Path(args.xlsx)
@@ -145,6 +150,15 @@ def main():
     proj_json = xlsx_path.parent / "project.json"
     force = ["--force"] if args.force else []
     drop = ["--allow-drop"] if args.allow_drop else []
+
+    if args.apply_safety_review:
+        if not Path(args.apply_safety_review).exists():
+            sys.exit(f"❌  --apply-safety-review: file not found: {args.apply_safety_review}")
+        if not proj_json.exists():
+            sys.exit("❌  project.json not found — run the pipeline once before applying a safety review")
+        print(f"\n{'═'*62}\n  CONTENT SAFETY — applying your decisions\n{'═'*62}")
+        if run_script("content_safety", [str(proj_json), "--apply-review", args.apply_safety_review]) != 0:
+            sys.exit(1)
 
     # ── Stage-4 gate flow ─────────────────────────────────────────────────────
     if args.contact_sheet:
@@ -177,7 +191,22 @@ def main():
     qa_rc = 0
     run_log = []
     need_preflight = not args.only_phase and args.from_phase <= 2
+    safety_final_rc = None
     for phase in phases:
+        if phase == 3:
+            print(f"\n{'═'*62}\n  CONTENT SAFETY — U-rated check of every asset, text and audio layer\n{'═'*62}")
+            src = run_script("content_safety", [str(proj_json), "--stage", "assets"])
+            run_log.append({"phase": "safety-assets", "script": "content_safety", "rc": src, "seconds": 0})
+            if src != 0:
+                failed = "safety"
+                print({1: "\n  ❌  Content that is not suitable for children was found — nothing was rendered.\n"
+                           "     Stock clips that failed were rejected automatically: rerun with --from 2 to fetch replacements.\n"
+                           "     Replace any of your own files that failed, then rerun.",
+                       3: "\n  ⚠️  Some items need your decision before rendering. Open Output/safety/assets_report.html,\n"
+                          "     Approve / Reject, Save safety_review.json, then rerun with\n"
+                          f"     --apply-safety-review <safety_review.json> --from 3",
+                       4: "\n  ❌  Content-safety models are missing: python content_safety.py --setup"}.get(src, ""))
+                break
         if need_preflight and phase > 1:
             need_preflight = False
             rc = run_preflight(proj_json, ["--no-fetch"] if args.skip_fetch else [])
@@ -212,6 +241,10 @@ def main():
         run_log.append({"phase": phase, "script": script, "rc": rc, "seconds": round(dt, 1)})
         if rc == 0:
             print(f"\n  ✅  Phase {phase} done  ({dt:.0f}s)")
+            if phase == 7:
+                print(f"\n{'═'*62}\n  CONTENT SAFETY — U-rated check of the exported video\n{'═'*62}")
+                safety_final_rc = run_script("content_safety", [str(proj_json), "--stage", "final"])
+                run_log.append({"phase": "safety-final", "script": "content_safety", "rc": safety_final_rc, "seconds": 0})
         elif phase == 8:
             qa_rc = rc
             print(f"\n  ⚠️  Phase 8 found critical QA issues — see Output/qa_report.md")
@@ -245,6 +278,9 @@ def main():
     if failed == "preflight":
         print("  ❌  Pipeline stopped at PREFLIGHT — fix the critical items above, then rerun")
         sys.exit(1)
+    if failed == "safety":
+        print("  🛡   Pipeline stopped at the CONTENT-SAFETY gate — see Output/safety/assets_report.html")
+        sys.exit(1)
     if failed:
         print(f"  ❌  Pipeline stopped at Phase {failed}: {PHASES[failed][1]}")
         print(f"     Fix the issue above and resume with:\n     python run_pipeline.py {xlsx_path.name} --from {failed}")
@@ -256,9 +292,16 @@ def main():
         print(f"  Cover     : {project['cover_frame']}")
     if project.get("qa_report"):
         print(f"  QA report : {project['qa_report']}   → verdict: {project.get('qa_verdict', '?')}")
+    st = project.get("safety_state", {})
+    if safety_final_rc is not None or st.get("final"):
+        fin = st.get("final", {})
+        signed = bool(st.get("signoff")) and st["signoff"].get("video_sha") == fin.get("video_sha")
+        print(f"  Safety    : {fin.get('status', '?')}  ·  sign-off {'recorded — ' + st['signoff']['name'] if signed else 'MISSING — do not publish'}"
+              f"\n              {fin.get('report', '')}")
     print("\n  🚦  G6: review on a phone with sound OFF first, then SHIP / FIX / KILL.")
+    print("  🛡   Publish only after the U-rated sign-off in Output/safety/final_report.html is recorded.")
     print("█"*62 + "\n")
-    sys.exit(qa_rc)
+    sys.exit(qa_rc or (1 if safety_final_rc not in (None, 0) else 0))
 
 
 if __name__ == "__main__":

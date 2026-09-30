@@ -71,6 +71,9 @@ Render-layer commands:
   python run_pipeline.py story_plan.xlsx --apply-picks picks.json   # downloads only the approved picks, logs licenses, renders
   python validation_report.py project.json                          # Keep / Swap per shot → "Save review.json"
   python run_pipeline.py story_plan.xlsx --apply-review review.json # re-fetches swapped shots; rejected assets never return
+  python content_safety.py --setup                                  # once: local U-rated safety models
+  (the asset safety gate runs before Phase 3; flagged items → Output/safety/assets_report.html → safety_review.json)
+  python run_pipeline.py story_plan.xlsx --apply-safety-review safety_review.json --from 3
 ```
 
 ## CARD 5 — Assembly

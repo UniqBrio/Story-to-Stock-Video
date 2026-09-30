@@ -119,6 +119,20 @@ def normalise_shot(shot: dict, project: dict, out_dir: Path, force: bool) -> tup
     duration = float(shot.get("duration", 4.0))
     out_file = out_dir / f"norm_{sid}.mp4"
 
+    # U-rated gate: nothing is rendered unless the content-safety check cleared this exact file and window
+    import content_safety as safety
+    if kind == "logo_card":
+        logo_src = shot.get("local_file") or logo_cfg.get("path", "")
+        blocked = safety.require_media(project, logo_src) if logo_src and Path(logo_src).exists() else ""
+    elif kind in ("stock", "product") and shot.get("local_file") and Path(shot["local_file"]).exists():
+        blocked = safety.require_media(project, shot["local_file"], bool(shot.get("illustration_only")),
+                                       safety.media_window(shot))
+    else:
+        blocked = ""
+    if blocked:
+        print(f"    🛡   {sid} — {blocked}. Run the safety gate (run_pipeline does it before Phase 3).")
+        return None, "blocked"
+
     if out_file.exists() and not force:
         info = probe_video_info(out_file)
         if abs(info["duration"] - duration) < 0.15 and info["width"] == tw and info["height"] == th:
@@ -296,6 +310,8 @@ def main():
             shot["normalised_file"] = str(result)
             shot["actual_duration"] = round(probe_video_info(result)["duration"], 3)
             ok += 1
+        elif status == "blocked":
+            err += 1
         elif status == "missing":
             norm_map.pop(shot["shot_id"], None)       # never let a stale render stand in for a missing source
             shot.pop("normalised_file", None)

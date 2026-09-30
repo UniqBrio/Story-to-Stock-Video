@@ -27,6 +27,7 @@ import json
 import argparse
 from pathlib import Path
 
+from content_safety import subject_needs_illustration, check_text, PASS as SAFE_PASS, FAIL as SAFE_FAIL
 from svos_common import (BRAND, normalise_shot_id, shot_kind, shot_treatment, words,
                          env_key, to_float, to_int, to_bool, hex_clean, compute_timeline,
                          timeline_total, REAL_TRANSITIONS)
@@ -73,6 +74,7 @@ HEADER_ALIASES = {
     "logo bug":           "logo_bug",
     "font size":          "text_size",
     "vo line":            "vo_line",
+    "visual style":       "visual_style",
     "notes":              "notes",
 }
 
@@ -92,6 +94,7 @@ ALLOWED = {
     "text_style":     {"auto", "caption", "keyword", "card", "cta", ""},
     "text_anim":      {"rise", "fade", "pop", "none", ""},
     "logo_bug":       {"yes", "no", "auto", ""},
+    "visual_style":   {"auto", "photo", "illustration", ""},
 }
 
 DEFAULT_SETTINGS = {
@@ -134,6 +137,12 @@ DEFAULT_SETTINGS = {
     "fetch_budget_unsplash": "40",      # Unsplash demo keys allow 50/hour
     "fetch_cache_hours":     "24",
     "max_download_mb":       "300",
+    # content safety (content_safety.py)
+    "vo_language":           "auto",    # auto | en | ta — language(s) Whisper listens for
+    "captions_path":         "",        # SRT / VTT / TXT captions to validate
+    "illustration_only_subjects": "",   # comma list; blank = built-in swimwear list
+    "safety_models_dir":     "",
+    "safety_frames_per_second": "1",
 }
 
 # Fields the fetcher writes per shot. They live only in project.json, so phase 1
@@ -184,7 +193,7 @@ def locate_columns(ws) -> tuple[dict, int]:
     return {f: i + 1 for i, f in enumerate(LEGACY_COLS)}, 4
 
 
-def read_shots(wb) -> tuple[list, list, list]:
+def read_shots(wb, subjects: list | None = None) -> tuple[list, list, list]:
     ws = wb["Shot Plan"]
     cols, first_row = locate_columns(ws)
     shots, warnings, errors = [], [], []
@@ -237,6 +246,7 @@ def read_shots(wb) -> tuple[list, list, list]:
             "logo_bug":       _str(val(r, "logo_bug"), "auto").lower(),
             "text_size":      to_int(val(r, "text_size"), 0),
             "vo_line":        _str(val(r, "vo_line")),
+            "visual_style":   _str(val(r, "visual_style"), "auto").lower(),
             "notes":          _str(val(r, "notes")),
         }
         if duration <= 0:
@@ -259,6 +269,18 @@ def read_shots(wb) -> tuple[list, list, list]:
         elif kind == "product":
             shot["asset_type"] = shot["asset_type"] or "video"
             shot["keywords"] = []          # product inserts come from the Demo Module Library, not stock
+
+        # Swimwear-type subjects may only use cartoon / illustrated / animated visuals
+        if kind == "stock":
+            subj = subject_needs_illustration(
+                [shot["scene_desc"], " ".join(shot["keywords"]), shot["text_overlay"], shot["vo_line"]], subjects)
+            if subj or shot["visual_style"] == "illustration":
+                shot["illustration_only"] = True
+                shot["illustration_reason"] = (f"subject “{subj}” — cartoon/illustration only, no real people"
+                                               if subj else "Visual Style = illustration")
+                if subj and shot["visual_style"] == "photo":
+                    warnings.append(f"Shot {sid} — Visual Style = photo ignored: the subject “{subj}” may only use "
+                                    f"cartoon / illustrated / animated visuals")
 
         # Trim window must equal the planned duration — otherwise every later overlay drifts
         d = shot["duration"]
@@ -398,8 +420,16 @@ def build_project(xlsx_path: Path, prev_json: Path | None = None) -> tuple[dict,
             sys.exit(f"❌  '{sheet}' sheet not found in {xlsx_path.name}")
 
     settings = {**DEFAULT_SETTINGS, **{k: v for k, v in read_settings(wb).items() if v != ""}}
-    shots, warnings, errors = read_shots(wb)
+    subjects = [x.strip() for x in str(settings.get("illustration_only_subjects", "")).split(",") if x.strip()] or None
+    shots, warnings, errors = read_shots(wb, subjects)
     carry_notes = carry_forward(shots, prev_json)
+    for s in shots:
+        for field, label in (("text_overlay", "on-screen text"), ("vo_line", "VO line")):
+            st, hits = check_text(s.get(field, ""))
+            if st == SAFE_FAIL:
+                errors.append(f"Shot {s['shot_id']} — {label} is not suitable for a U audience: {'; '.join(hits)}")
+            elif st != SAFE_PASS:
+                warnings.append(f"Shot {s['shot_id']} — {label} needs a content-safety review: {'; '.join(hits)}")
     if not shots:
         errors.append("Shot Plan has no shots")
     warnings += restraint_audit(shots, settings)
@@ -499,10 +529,22 @@ def build_project(xlsx_path: Path, prev_json: Path | None = None) -> tuple[dict,
             "cache_hours": to_float(settings.get("fetch_cache_hours"), 24.0),
             "max_download_mb": to_float(settings.get("max_download_mb"), 300.0),
         },
+        "safety": {
+            "vo_language": str(settings.get("vo_language", "auto")).lower(),
+            "captions_path": _clean_path(settings.get("captions_path", "")),
+            "models_dir": _clean_path(settings.get("safety_models_dir", "")),
+            "frames_per_second": to_float(settings.get("safety_frames_per_second"), 1.0),
+            "illustration_only_subjects": subjects or [],
+        },
         "shots":    shots,
         "timeline": timeline,
         "validation": {"warnings": warnings, "errors": errors},
     }
+    if prev_json and prev_json.exists():
+        try:   # safety decisions are keyed by content hash, so they stay valid when the sheet is re-read
+            project["safety_state"] = json.loads(prev_json.read_text(encoding="utf-8-sig")).get("safety_state", {})
+        except Exception:
+            pass
     infos = [n[len("info: "):] for n in carry_notes if n.startswith("info: ")]
     warnings += [n for n in carry_notes if not n.startswith("info: ")]
     project["carried_forward"] = infos

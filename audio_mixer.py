@@ -226,6 +226,17 @@ def main():
         save_project(project, proj_path)
         return
 
+    # U-rated gate: every audio layer (VO, music, BGM, sting) must have passed the content-safety check
+    import content_safety as safety
+    blocked = []
+    for k in ("vo_path", "music_path", "bgm_path", "sting_path"):
+        p = project.get("audio", {}).get(k, "")
+        if p and Path(p).exists() and safety.require_audio(project, p):
+            blocked.append(f"{k}: {safety.require_audio(project, p)}")
+    if blocked:
+        print("  🛡   Not mixed — audio not cleared:\n" + "\n".join(f"     • {b}" for b in blocked))
+        sys.exit(1)
+
     with tempfile.TemporaryDirectory(prefix="svos_audio_") as tmp:
         report = mix(project, Path(overlaid), out_file, Path(tmp))
     if not report:

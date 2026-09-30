@@ -1,2 +1,9 @@
 openpyxl>=3.1
 pillow>=10
+# U-rated content safety (local models, no cloud) — then run: python content_safety.py --setup
+numpy>=1.24
+onnxruntime>=1.17
+regex>=2023.0
+nudenet>=3.4
+rapidocr_onnxruntime>=1.4
+sherpa-onnx>=1.10

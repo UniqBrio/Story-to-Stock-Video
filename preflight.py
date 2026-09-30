@@ -10,6 +10,8 @@ quietly broken video.
                       Tamil overlay text with no Tamil font, or an FFmpeg that cannot shape Tamil ·
                       stock shots still to fetch but no provider key ·
                       T4 product insert file missing · vo_path set but missing
+  Critical (safety) : safety models / packages missing · on-screen text or VO line that fails the U-rated
+                      blocklist · captions file missing
   Warnings          : brand font not found (fallback used) · music/BGM/sting/logo missing ·
                       Pillow missing (text auto-fit degrades) · some provider keys missing
 
@@ -113,6 +115,28 @@ def main():
                         f"set PEXELS_API_KEY / PIXABAY_API_KEY / UNSPLASH_API_KEY")
         elif no_key:
             warn.append(f"No API key for {', '.join(no_key)} — fewer candidates per shot")
+
+    # ── Content safety (U-rated) — mandatory ─────────────────────────────────
+    import content_safety as safety
+    for issue in safety.readiness(project):
+        crit.append(f"Content safety: {issue}")
+    for s in shots:
+        for field, label in (("text_overlay", "on-screen text"), ("vo_line", "VO line")):
+            t = (s.get(field) or "").strip()
+            if not t or (field == "text_overlay" and shot_kind(s) == "product"):
+                continue
+            st, hits = safety.check_text(t)
+            if st == safety.FAIL and not safety.is_cleared(project, safety.text_key(t)):
+                crit.append(f"{s['shot_id']}: {label} is not suitable for a U audience — {'; '.join(hits)}")
+            elif st == safety.REVIEW and not safety.is_cleared(project, safety.text_key(t)):
+                warn.append(f"{s['shot_id']}: {label} will need your content-safety approval — {'; '.join(hits)}")
+    cap = project.get("safety", {}).get("captions_path", "")
+    if cap and not Path(cap).exists():
+        render_crit.append(f"captions_path set but file missing — {cap}")
+    illu = [s["shot_id"] for s in shots if s.get("illustration_only")]
+    if illu:
+        warn.append(f"Cartoon / illustration only (swimwear-type subject): shots {', '.join(illu)} — real photos, "
+                    f"real faces and celebrity likenesses will fail the safety check")
 
     # ── Audio / brand files ───────────────────────────────────────────────────
     audio = project.get("audio", {})
