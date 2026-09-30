@@ -166,6 +166,7 @@ The Python/FFmpeg layer now renders every treatment above from the sheet — see
 | Phase | Script | Renders |
 |---|---|---|
 | 1 | `story_reader.py` | Excel → `project.json`, validation + restraint audit (§2) |
+| — | `preflight.py` | Keys, fonts (bundled `fonts/`), FFmpeg drawtext, VO/logo/product files — stops the run on critical gaps |
 | 2 | `asset_fetcher.py` | Per-phrase stock search, scoring, license log; `--candidates N` → `contact_sheet.html` for G4 |
 | 3 | `clip_normaliser.py` | T1 cards · T2/T3 stock (exact duration, arc grade + ONE unified grade, Ken Burns) · T4 product inserts · T5 logo card |
 | 4 | `transition_engine.py` | Single-pass xfade assembly; writes the authoritative **timeline** |
@@ -175,6 +176,7 @@ The Python/FFmpeg layer now renders every treatment above from the sheet — see
 | 8 | `qa_check.py` | Automated half of the G6 battery → `Output/qa_report.md` + thumb-stop frames |
 
 ```
+python run_pipeline.py story_plan.xlsx --preflight           # phase 1 + checks only
 python run_pipeline.py story_plan.xlsx                       # full render + QA
 python run_pipeline.py story_plan.xlsx --contact-sheet 8     # G4: candidates only, no downloads
 python run_pipeline.py story_plan.xlsx --from 2 --apply-picks picks.json

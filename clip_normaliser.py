@@ -264,6 +264,8 @@ def main():
     ap.add_argument("project", help="Path to project.json")
     ap.add_argument("--shot",  help="Process a single shot ID only")
     ap.add_argument("--force", action="store_true", help="Re-render even if the normalised file exists")
+    ap.add_argument("--allow-drop", action="store_true",
+                    help="Continue when a shot has no source (the shot is dropped and the video gets shorter)")
     args = ap.parse_args()
 
     check_ffmpeg()
@@ -285,7 +287,8 @@ def main():
            f"{project.get('render', {}).get('unified_grade', 'warm_soft')}", f"Output: {norm_dir}")
 
     norm_map = dict(project.get("normalised_map", {}))
-    ok = err = skip = 0
+    ok = err = 0
+    missing = []
     for shot in targets:
         result, status = normalise_shot(shot, project, norm_dir, args.force)
         if result:
@@ -294,18 +297,26 @@ def main():
             shot["actual_duration"] = round(probe_video_info(result)["duration"], 3)
             ok += 1
         elif status == "missing":
-            skip += 1
+            norm_map.pop(shot["shot_id"], None)       # never let a stale render stand in for a missing source
+            shot.pop("normalised_file", None)
+            missing.append(shot["shot_id"])
         else:
             err += 1
 
     project["normalised_map"] = norm_map
     save_project(project, proj_path)
 
-    print(f"\n{'═'*62}\n  ✅  {ok} normalised  |  {skip} missing source  |  {err} errors")
-    if skip:
-        print("  ⚠️  Shots with a missing source are DROPPED from the assembly — fix them before Phase 4")
+    print(f"\n{'═'*62}\n  {'✅' if not (missing or err) else '❌'}  {ok} normalised  |  "
+          f"{len(missing)} missing source  |  {err} errors")
+    if missing:
+        print(f"  Missing source: {', '.join(missing)}")
+        if args.allow_drop:
+            print("  ⚠️  --allow-drop: these shots are DROPPED and the video will be shorter than the plan")
+        else:
+            print("  ❌  Refusing to continue — a dropped shot shortens the picture and desyncs the VO.\n"
+                  "     Fix the assets (validation_report.py / prompt_generator.py) or rerun with --allow-drop")
     print(f"  normalised_map saved to project.json\n{'═'*62}\n")
-    if err:
+    if err or (missing and not args.allow_drop):
         sys.exit(1)
 
 

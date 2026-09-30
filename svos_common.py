@@ -230,8 +230,10 @@ _FONT_FILES = {
     "mukta malar":     ["MuktaMalar-Bold.ttf", "MuktaMalar-Regular.ttf"],
     "nirmala ui":      ["NirmalaB.ttc", "Nirmala.ttc"],
     "latha":           ["lathab.ttf", "latha.ttf"],
+    "dejavu sans":     ["DejaVuSans-Bold.ttf", "DejaVuSans.ttf"],          # Linux safety net
 }
-_LATIN_FALLBACK = ["inter", "manrope", "poppins", "montserrat", "segoe ui", "arial", "calibri", "tahoma", "verdana"]
+_LATIN_FALLBACK = ["inter", "manrope", "poppins", "montserrat", "segoe ui", "arial", "calibri", "tahoma", "verdana",
+                   "dejavu sans"]
 _TAMIL_FALLBACK = ["noto sans tamil", "catamaran", "mukta malar", "nirmala ui", "latha"]
 
 def _font_dirs(fonts_folder: str | Path | None) -> list[Path]:
@@ -241,7 +243,7 @@ def _font_dirs(fonts_folder: str | Path | None) -> list[Path]:
     dirs.append(Path(__file__).parent / "fonts")
     dirs.append(_WIN_FONTS)
     dirs += [Path("/usr/share/fonts/truetype/noto"), Path("/usr/share/fonts/truetype/dejavu"),
-             Path("/System/Library/Fonts"), Path(os.path.expanduser("~/.fonts"))]
+             Path("/System/Library/Fonts"), Path("/Library/Fonts"), Path(os.path.expanduser("~/.fonts"))]
     return [d for d in dirs if d.exists()]
 
 def _find_in_dirs(files: list[str], dirs: list[Path]) -> str:
@@ -291,6 +293,25 @@ def find_font(preferred: str = "Inter", tamil: bool = False,
         if hit:
             return hit
     return ""
+
+def font_is_family(font_path: str, family: str) -> bool:
+    """True if a resolved font file belongs to the named family (e.g. 'Inter-Bold.ttf' → 'Inter')."""
+    if not font_path or not family:
+        return False
+    if Path(family).exists():                         # an explicit font file was configured
+        return Path(font_path).name.lower() == Path(family).name.lower()
+    name = Path(font_path).name.lower()
+    fam = family.lower().strip()
+    return name in {f.lower() for f in _FONT_FILES.get(fam, [])} or name.startswith(fam.replace(" ", ""))
+
+def is_tamil_font(font_file: str, tamil_preferred: str = "") -> bool:
+    """True if a font file (path or bare name) is one of the known Tamil-capable families."""
+    name = Path(font_file or "").name.lower()
+    if not name:
+        return False
+    if tamil_preferred and name == Path(tamil_preferred).name.lower():
+        return True
+    return any(name in {f.lower() for f in _FONT_FILES.get(fam, [])} for fam in _TAMIL_FALLBACK)
 
 def ff_font_arg(font_path: str) -> str:
     """Escape a font path for use inside a drawtext option: C\\:/Windows/Fonts/x.ttf"""

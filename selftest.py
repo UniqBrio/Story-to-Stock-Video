@@ -31,7 +31,7 @@ import subprocess
 from pathlib import Path
 
 import openpyxl
-from svos_common import probe_video_info, check_ffmpeg
+from svos_common import probe_video_info, check_ffmpeg, is_tamil_font, font_is_family, find_font, ff_font_arg
 
 HERE = Path(__file__).parent
 
@@ -68,8 +68,11 @@ def make_assets(d: Path) -> dict:
     if logo:
         shutil.copy2(logo, a / "logo.png")
     else:
+        # explicit fontfile: without fontconfig (Windows builds) a bare drawtext can crash FFmpeg
+        font = ff_font_arg(find_font("Inter"))
         ff("-f", "lavfi", "-i", "color=c=white@0.0:s=800x260,format=rgba", "-frames:v", "1",
-           "-vf", "drawtext=text='UniqBrio':fontsize=150:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2", str(a / "logo.png"))
+           "-vf", f"drawtext=fontfile='{font}':text='UniqBrio':fontsize=150:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2",
+           str(a / "logo.png"))
     return {k: str(a / v) for k, v in {
         "landscape": "clip_landscape.mp4", "short": "clip_short.mp4", "bars": "clip_bars.mp4",
         "demo": "demo_screen.mp4", "still": "still.png", "vo": "vo.wav", "sting": "sting.wav",
@@ -171,7 +174,9 @@ def main():
     check("005" not in ids, "T4 product insert overlay was dropped")
     check(set(ids) == {"001", "002", "004", "006", "007"}, f"overlays rendered for {ids}")
     tam = next((m for m in man if m["shot_id"] == "006"), None)
-    check(bool(tam and tam["tamil"] and tam["font"] != "ffmpeg-default"), f"Tamil overlay uses a Tamil font ({tam['font'] if tam else '-'})")
+    check(bool(tam and tam["tamil"] and is_tamil_font(tam["font"])), f"Tamil overlay uses a Tamil font ({tam['font'] if tam else '-'})")
+    latin = sorted({m["font"] for m in man if not m["tamil"]})
+    check(bool(latin) and all(font_is_family(f, "Inter") for f in latin), f"Latin overlays use the bundled brand font ({', '.join(latin)})")
     card = next((m for m in man if m["shot_id"] == "002"), None)
     check(bool(card and card["style"] == "card" and card["color"].upper() == "#111114"), "T1 card text is near-black on the off-white card")
     ar = proj.get("audio_report", {})
@@ -190,6 +195,36 @@ def main():
     check(abs(norm5.get("duration", 0) - 4.0) < 0.1, f"product insert normalised to {norm5.get('duration', 0):.2f}s")
     norm3 = probe_video_info(proj["normalised_map"]["003"]) if "003" in proj.get("normalised_map", {}) else {}
     check(abs(norm3.get("duration", 0) - 4.0) < 0.1, f"3s source held to {norm3.get('duration', 0):.2f}s shot")
+    qa = json.loads((d / "Output" / "qa_report.json").read_text(encoding="utf-8")) \
+        if (d / "Output" / "qa_report.json").exists() else {}
+    font_crit = [i for i in qa.get("findings", []) if i.get("severity") == "critical" and i.get("area") in ("fonts", "completeness")]
+    check(not font_crit, f"QA has no font/completeness criticals ({len(font_crit)})")
+
+    print("\n══ fail-loudly checks ══")
+    pf = subprocess.run([sys.executable, str(HERE / "preflight.py"), str(d / "project.json"), "--no-fetch"],
+                        capture_output=True, text=True, encoding="utf-8", errors="replace").returncode
+    check(pf == 0, f"preflight passes on the complete plan (rc={pf})")
+
+    # A stock shot with no file and no API keys → fetcher must exit non-zero (was: exit 0, render continued)
+    nokey = dict(proj, shots=[dict(s, local_file="", status="pending") if s["shot_id"] == "001" else s
+                              for s in proj["shots"]], source_xlsx="")
+    nk_path = d / "project_nokeys.json"
+    nk_path.write_text(json.dumps(nokey, ensure_ascii=False), encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if k not in ("PEXELS_API_KEY", "PIXABAY_API_KEY", "UNSPLASH_API_KEY")}
+    pf2 = subprocess.run([sys.executable, str(HERE / "preflight.py"), str(nk_path)],
+                         capture_output=True, text=True, encoding="utf-8", errors="replace", env=env).returncode
+    check(pf2 == 1, f"preflight flags a shot to fetch with no provider key (rc={pf2})")
+    fr = subprocess.run([sys.executable, str(HERE / "asset_fetcher.py"), str(nk_path), "--shot", "001"],
+                        capture_output=True, text=True, encoding="utf-8", errors="replace", env=env).returncode
+    check(fr == 2, f"fetcher exits 2 when a shot gets no asset (rc={fr})")
+
+    # A missing source must stop the render instead of silently dropping the shot
+    before = final.stat().st_mtime if final.exists() else 0
+    Path(A["still"]).unlink(missing_ok=True)
+    r2 = subprocess.run([sys.executable, str(HERE / "run_pipeline.py"), str(xlsx), "--from", "3", "--force", "--no-qa"],
+                        capture_output=True, text=True, encoding="utf-8", errors="replace").returncode
+    check(r2 != 0, f"pipeline stops when shot 004's source is missing (rc={r2})")
+    check((final.stat().st_mtime if final.exists() else 0) == before, "final export was not rewritten with a dropped shot")
 
     print(f"\n{'✅  SELFTEST PASSED' if not fails else '❌  SELFTEST FAILED: ' + str(len(fails)) + ' check(s)'}  (pipeline rc={rc})")
     print(f"   folder: {d}\n")

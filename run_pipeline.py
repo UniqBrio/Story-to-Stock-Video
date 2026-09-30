@@ -8,6 +8,7 @@ Single entry point — runs every phase in sequence.
 
 Phases:
     1  story_reader        Excel → project.json (+ validation, restraint audit)
+       preflight           Keys · fonts · FFmpeg · referenced files — critical findings stop the run
     2  asset_fetcher       Stock assets (skipped for cards / product inserts)
     3  clip_normaliser     Exact-duration clips · cards · grades · Ken Burns
     4  transition_engine   Single-pass assembly + authoritative timeline
@@ -28,6 +29,8 @@ Options:
     --refetch         Phase 2: re-download assets even if files exist (approved picks are lost!)
     --skip-fetch      Skip phase 2 (assets already in place)
     --no-qa           Skip phase 8
+    --preflight       Run phase 1 + preflight checks only, then stop
+    --allow-drop      Phases 3–4: continue when a shot has no source (video gets shorter than the plan)
     --shot ID         Phase 3 only: normalise a single shot
     --contact-sheet N Stage-4 gate: run phase 1, gather N candidates/shot → contact_sheet.html, STOP for G4
     --apply-picks F   Download the G4 picks from F (picks.json), then continue with phases 3–8
@@ -71,7 +74,13 @@ def run_script(name: str, args: list[str]) -> int:
     if not script.exists():
         print(f"  ❌  Script not found: {script}")
         return 127
+    sys.stdout.flush()                                # keep our banners in order with the child output
     return subprocess.run([sys.executable, str(script)] + args).returncode
+
+
+def run_preflight(proj_json: Path, extra: list[str]) -> int:
+    print(f"\n{'═'*62}\n  PREFLIGHT — keys · fonts · FFmpeg · referenced files\n{'═'*62}")
+    return run_script("preflight", [str(proj_json)] + extra)
 
 
 def banner(phase: int, label: str):
@@ -106,6 +115,8 @@ def main():
     ap.add_argument("--refetch", action="store_true", help="Phase 2: re-download assets even if present")
     ap.add_argument("--skip-fetch", action="store_true")
     ap.add_argument("--no-qa", action="store_true")
+    ap.add_argument("--preflight", action="store_true", help="Run phase 1 + preflight checks, then stop")
+    ap.add_argument("--allow-drop", action="store_true", help="Phases 3–4: tolerate shots with no source")
     ap.add_argument("--shot", default=None)
     ap.add_argument("--contact-sheet", type=int, default=0, metavar="N")
     ap.add_argument("--apply-picks", default=None, metavar="PICKS_JSON")
@@ -125,15 +136,24 @@ def main():
 
     proj_json = xlsx_path.parent / "project.json"
     force = ["--force"] if args.force else []
+    drop = ["--allow-drop"] if args.allow_drop else []
 
     # ── Stage-4 gate flow ─────────────────────────────────────────────────────
     if args.contact_sheet:
         banner(1, PHASES[1][1])
         if run_script("story_reader", [str(xlsx_path), "--out", str(proj_json)]) != 0:
             sys.exit(1)
+        if run_preflight(proj_json, ["--need-keys"]) != 0:
+            sys.exit(1)
         banner(2, "Gather candidates → contact sheet (G4)")
         rc = run_script("asset_fetcher", [str(proj_json), "--candidates", str(args.contact_sheet)])
         sys.exit(rc)
+
+    if args.preflight:
+        banner(1, PHASES[1][1])
+        if run_script("story_reader", [str(xlsx_path), "--out", str(proj_json)]) != 0:
+            sys.exit(1)
+        sys.exit(run_preflight(proj_json, ["--no-fetch"] if args.skip_fetch else []))
 
     if args.only_phase:
         phases = [args.only_phase]
@@ -148,7 +168,16 @@ def main():
     failed = None
     qa_rc = 0
     run_log = []
+    need_preflight = not args.only_phase and args.from_phase <= 2
     for phase in phases:
+        if need_preflight and phase > 1:
+            need_preflight = False
+            rc = run_preflight(proj_json, ["--no-fetch"] if args.skip_fetch else [])
+            run_log.append({"phase": "preflight", "script": "preflight", "rc": rc, "seconds": 0})
+            if rc != 0:
+                print("\n  ❌  Preflight found critical issues — nothing was fetched or rendered")
+                failed = "preflight"
+                break
         script, label = PHASES[phase]
         banner(phase, label)
         t0 = time.time()
@@ -161,8 +190,10 @@ def main():
             elif args.refetch:
                 pa += ["--refetch"]
         elif phase == 3:
-            pa = [str(proj_json)] + (["--shot", args.shot] if args.shot else []) + force
-        elif phase in (4, 5, 6, 7):
+            pa = [str(proj_json)] + (["--shot", args.shot] if args.shot else []) + force + drop
+        elif phase == 4:
+            pa = [str(proj_json)] + force + drop
+        elif phase in (5, 6, 7):
             pa = [str(proj_json)] + force
         else:
             pa = [str(proj_json)]
@@ -174,8 +205,9 @@ def main():
         elif phase == 8:
             qa_rc = rc
             print(f"\n  ⚠️  Phase 8 found critical QA issues — see Output/qa_report.md")
-        elif phase == 2 and not args.apply_picks:
-            print(f"\n  ⚠️  Phase 2 finished with missing assets — review validation_report / contact sheet before rendering")
+        elif phase == 2:
+            print(f"\n  ❌  Phase 2 finished with missing assets — nothing was rendered.\n"
+                  f"     Review: python validation_report.py {proj_json.name}  ·  AI fallback: python prompt_generator.py {proj_json.name}")
             failed = phase
             break
         else:
@@ -200,6 +232,9 @@ def main():
         pass
 
     print("\n" + "█"*62)
+    if failed == "preflight":
+        print("  ❌  Pipeline stopped at PREFLIGHT — fix the critical items above, then rerun")
+        sys.exit(1)
     if failed:
         print(f"  ❌  Pipeline stopped at Phase {failed}: {PHASES[failed][1]}")
         print(f"     Fix the issue above and resume with:\n     python run_pipeline.py {xlsx_path.name} --from {failed}")

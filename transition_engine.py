@@ -151,6 +151,8 @@ def main():
     ap = argparse.ArgumentParser(description="Assemble all clips with transitions (single pass)")
     ap.add_argument("project", help="Path to project.json")
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--allow-drop", action="store_true",
+                    help="Assemble even if some shots have no normalised clip (video gets shorter)")
     args = ap.parse_args()
 
     check_ffmpeg()
@@ -167,7 +169,14 @@ def main():
     clips = collect_clips(project)
     if not clips:
         sys.exit("  ❌  No clips to assemble — run clip_normaliser.py first")
-    dropped = len(project["shots"]) - len(clips)
+    present = {c["shot"]["shot_id"] for c in clips}
+    dropped_ids = [s["shot_id"] for s in project["shots"] if s["shot_id"] not in present]
+    dropped = len(dropped_ids)
+    if dropped and not args.allow_drop:
+        sys.exit(f"\n  ❌  {dropped} shot(s) have no normalised clip: {', '.join(dropped_ids)}\n"
+                 f"     Refusing to assemble a video shorter than the plan (the VO would run past the picture).\n"
+                 f"     Fix the sources and rerun from Phase 3, or pass --allow-drop.")
+    project["dropped_shots"] = dropped_ids
 
     # Authoritative timeline (actual clip durations, overlaps subtracted)
     shots_present = [c["shot"] for c in clips]

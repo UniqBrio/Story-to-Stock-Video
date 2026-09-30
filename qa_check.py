@@ -9,6 +9,8 @@ writes Output/qa_report.md + qa_report.json + Output/qa/frame_*.jpg.
   Loudness    : integrated LUFS vs target (±1 LU) · true peak
   Picture     : black frames · frozen video (outside T1/T5 cards) · thumb-stop frames at 0/1/2/3 s
   Sound       : dead air > 1.5 s
+  Complete    : every planned shot is in the timeline · no shot left in error/swap
+  Fonts       : no FFmpeg-default font · Tamil text in a Tamil font · brand font used
   Story rules : hook in ≤ 1.5 s · restraint budget (README §2) · reading-time minimums ·
                 single CTA · brand linkage (T5 card or bug) · safe zones on · license log complete
   Manual      : sound-off comprehension · phone viewing — listed as reminders, never auto-passed
@@ -28,7 +30,8 @@ from pathlib import Path
 from datetime import datetime
 
 from svos_common import (load_project, save_project, check_ffmpeg, run_ff, run_ff_capture,
-                         probe_video_info, banner, set_log, output_dir, shot_kind, words)
+                         probe_video_info, banner, set_log, output_dir, shot_kind, words,
+                         font_is_family, is_tamil_font)
 
 CTA_RE = re.compile(r"\b(dm|comment|link|click|tap|follow|visit|call|whatsapp|bio|download|sign\s*up|book|demo)\b", re.I)
 
@@ -136,6 +139,16 @@ def main():
     if planned and abs(info["duration"] - planned) > 0.35:
         R.add("major", "length", f"Final is {info['duration']:.2f}s but the timeline says {planned:.2f}s — check dropped shots")
 
+    # ── Completeness (every planned shot made it into the picture) ────────────
+    in_timeline = {t["shot_id"] for t in timeline}
+    absent = [s["shot_id"] for s in project["shots"] if s["shot_id"] not in in_timeline]
+    if timeline and absent:
+        R.add("critical", "completeness", f"{len(absent)} planned shot(s) missing from the video: {', '.join(absent)} "
+                                          f"— the VO runs past the picture")
+    for s in project["shots"]:
+        if s.get("status") in ("error", "swap"):
+            R.add("critical", "completeness", f"{s['shot_id']}: asset status '{s['status']}' — no approved asset")
+
     # ── Loudness ──────────────────────────────────────────────────────────────
     loud = ebur128(final)
     target = float(audio_cfg.get("target_lufs", -14))
@@ -194,6 +207,20 @@ def main():
         R.add("major", "restraint", f"{len(kw)} stock overlays > budget {text_cfg.get('overlay_budget', 5)}")
     for note in project.get("overlay_audit", []):
         R.add("minor", "overlay", note)
+
+    # ── Fonts (a wrong font is visible on every frame it touches) ─────────────
+    brand_font = text_cfg.get("font", "Inter") or "Inter"
+    for m in manifest:
+        font = m.get("font", "")
+        if font == "ffmpeg-default":
+            R.add("critical", "fonts", f"{m['shot_id']}: overlay rendered in FFmpeg's built-in default font"
+                                       + (" — Tamil glyphs show as boxes" if m.get("tamil") else ""))
+        elif m.get("tamil") and not is_tamil_font(font, text_cfg.get("font_tamil", "")):
+            R.add("critical", "fonts", f"{m['shot_id']}: Tamil text rendered in {font}, which has no Tamil glyphs")
+    latin_fonts = sorted({m["font"] for m in manifest if not m.get("tamil") and m.get("font") != "ffmpeg-default"})
+    off_brand = [f for f in latin_fonts if not font_is_family(f, brand_font)]
+    if off_brand:
+        R.add("minor", "fonts", f"Brand font '{brand_font}' not used — overlays fell back to {', '.join(off_brand)}")
 
     cta_hits = [m for m in manifest if CTA_RE.search(" ".join(m["lines"]))]
     if len(cta_hits) == 0:

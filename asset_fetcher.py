@@ -588,9 +588,13 @@ def main():
         if write_excel_logs(xlsx, log_rows, tracker_rows):
             print(f"\n  ✅  Download Log + Asset Tracker updated in {xlsx.name}")
 
-    print(f"\n{'═'*62}\n  ✅  {ok} downloaded  |  {skipped} kept  |  {errors} errors/rejects\n  project.json updated\n{'═'*62}\n")
-    if errors and not args.apply_picks:
+    print(f"\n{'═'*62}\n  {'❌' if errors else '✅'}  {ok} downloaded  |  {skipped} kept  |  {errors} errors/rejects\n"
+          f"  project.json updated\n{'═'*62}\n")
+    if errors:
+        failed = [s["shot_id"] for s in shots if s.get("status") in ("error", "swap")]
+        print(f"  Shots without an asset: {', '.join(failed) or '?'}")
         print("  Next: python validation_report.py project.json   (review)  ·  python prompt_generator.py project.json  (AI fallback)\n")
+        sys.exit(2)                                   # run_pipeline stops here instead of rendering a short video
 
 
 if __name__ == "__main__":

@@ -8,7 +8,8 @@ mixing, export and an automated QA pass.
 
 - Python 3.10+
 - [FFmpeg](https://ffmpeg.org/) and `ffprobe` on your `PATH`
-- `pip install -r requirements.txt`
+- `pip install -r requirements.txt` (openpyxl, Pillow)
+- Fonts: Inter and Noto Sans Tamil ship in `fonts/` (SIL OFL) and are used before any system font
 
 ## Setup
 
@@ -34,6 +35,7 @@ Phases run in sequence:
 | # | Stage | What it does |
 |---|-------|--------------|
 | 1 | `story_reader` | Excel → `project.json` (+ validation, restraint audit) |
+| — | `preflight` | Keys · fonts · FFmpeg · referenced files — critical findings stop the run |
 | 2 | `asset_fetcher` | Stock assets (skipped for cards / product inserts) |
 | 3 | `clip_normaliser` | Exact-duration clips · cards · grades · Ken Burns |
 | 4 | `transition_engine` | Single-pass assembly + authoritative timeline |
@@ -42,7 +44,13 @@ Phases run in sequence:
 | 7 | `final_export` | H.264 High · BT.709 · cover frame · render manifest |
 | 8 | `qa_check` | Automated QA battery → `Output/qa_report.md` |
 
-Useful flags: `--from N`, `--only N`, `--force`, `--skip-fetch`, `--no-qa`.
+Useful flags: `--from N`, `--only N`, `--force`, `--skip-fetch`, `--no-qa`,
+`--preflight` (phase 1 + checks only), `--allow-drop` (see below).
+
+The pipeline fails loudly. If any shot ends up without an asset, the fetcher exits non-zero and
+nothing is rendered. Phases 3–4 refuse to assemble a video with a missing shot, because a dropped
+shot shortens the picture and the VO runs past it. Pass `--allow-drop` only for a deliberate draft
+render. QA then still marks the result **FIX BEFORE G6**.
 Run `python run_pipeline.py --help` for the full list.
 
 Optional utilities: `validation_report.py` (review fetched assets side by side),
