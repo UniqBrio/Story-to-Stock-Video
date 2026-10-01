@@ -5,5 +5,5 @@ numpy>=1.24
 onnxruntime>=1.17
 regex>=2023.0
 nudenet>=3.4
-rapidocr_onnxruntime>=1.4
+rapidocr>=3.4
 sherpa-onnx>=1.10

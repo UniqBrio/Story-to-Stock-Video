@@ -11,8 +11,8 @@ mixing, export and an automated QA pass.
   libfreetype and HarfBuzz (on Windows, the gyan.dev "full" build). FFmpeg 6.1 misspells Tamil
   overlays by drawing vowel signs such as ை on the wrong side. Preflight checks this for you.
 - `pip install -r requirements.txt` (openpyxl, Pillow, and the local content-safety packages)
-- `python content_safety.py --setup` once. It downloads and checksum-verifies about 1 GB of local models:
-  CLIP ViT-B/32 (ONNX) and Whisper small (sherpa-onnx). NudeNet and RapidOCR ship inside their pip packages.
+- `python content_safety.py --setup` once. It downloads about 1.2 GB once, checksum-verifies it, and keeps about 1 GB of local models:
+  CLIP ViT-B/32 (ONNX) and Whisper small (sherpa-onnx). NudeNet and RapidOCR ship inside their pip packages. Python 3.10–3.13 are supported.
 - Fonts: Inter and Noto Sans Tamil ship in `fonts/` (SIL OFL) and are used before any system font
 
 ## Setup

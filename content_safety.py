@@ -80,7 +80,9 @@ MODELS = {
     },
 }
 PACKAGES = {"numpy": "numpy", "PIL": "pillow", "onnxruntime": "onnxruntime", "regex": "regex",
-            "nudenet": "nudenet", "rapidocr_onnxruntime": "rapidocr_onnxruntime", "sherpa_onnx": "sherpa-onnx"}
+            "nudenet": "nudenet", "sherpa_onnx": "sherpa-onnx"}
+# OCR: rapidocr 3.x (any Python ≥ 3.8, models bundled in the wheel); rapidocr_onnxruntime (≤ 3.12) still works
+OCR_MODULES = ("rapidocr", "rapidocr_onnxruntime")
 
 
 def models_dir(project: dict | None = None) -> Path:
@@ -201,7 +203,43 @@ def missing_packages() -> list:
             __import__(mod)
         except Exception:
             out.append(pipname)
+    if not any(_importable(m) for m in OCR_MODULES):
+        out.append("rapidocr")
     return out
+
+
+def _importable(mod: str) -> bool:
+    try:
+        __import__(mod)
+        return True
+    except Exception:
+        return False
+
+
+def load_ocr():
+    """Return read(image_path) → [(text, score)] using whichever RapidOCR package is installed."""
+    import logging
+    try:
+        from rapidocr import RapidOCR                      # 3.x
+        try:
+            eng = RapidOCR(params={"Global.log_level": "error"})   # its config resets the logger at start-up
+        except TypeError:
+            eng = RapidOCR()
+        logging.getLogger("RapidOCR").setLevel(logging.ERROR)
+
+        def read(path: str) -> list:
+            r = eng(path)
+            return list(zip(r.txts or (), r.scores or ()))
+        return read
+    except ImportError:
+        from rapidocr_onnxruntime import RapidOCR          # 1.x
+        logging.getLogger("RapidOCR").setLevel(logging.ERROR)
+        eng = RapidOCR()
+
+        def read(path: str) -> list:
+            res, _ = eng(path)
+            return [(r[1], float(r[2])) for r in (res or [])]
+        return read
 
 
 def missing_models(mdir: Path | None = None) -> list:
@@ -275,11 +313,14 @@ def setup(mdir: Path) -> int:
             for m in tf.getmembers():
                 if Path(m.name).name in MODELS["whisper"]["keep"]:
                     m.name = Path(m.name).name
-                    tf.extract(m, w)
+                    try:
+                        tf.extract(m, w, filter="data")      # Python 3.12+: refuse links / absolute paths
+                    except TypeError:
+                        tf.extract(m, w)
         arc.unlink(missing_ok=True)
     # NudeNet and RapidOCR ship their models inside the pip packages; load them once to prove it.
     from nudenet import NudeDetector  # noqa: F401
-    from rapidocr_onnxruntime import RapidOCR  # noqa: F401
+    load_ocr()
     left = missing_models(mdir)
     if left:
         print(f"  ❌  still missing: {left}")
@@ -457,10 +498,7 @@ class Engines:
     @property
     def ocr(self):
         if self._ocr is None:
-            import logging
-            from rapidocr_onnxruntime import RapidOCR
-            logging.getLogger("RapidOCR").setLevel(logging.ERROR)
-            self._ocr = RapidOCR()
+            self._ocr = load_ocr()
         return self._ocr
 
     def asr(self, language: str):
@@ -568,10 +606,10 @@ def judge_frame(eng: Engines, frame: Path, illustration_only: bool, do_ocr: bool
     text = ""
     if do_ocr:
         try:
-            res, _ = eng.ocr(str(frame))
-            text = " ".join(r[1] for r in (res or []) if float(r[2]) >= 0.6)
-        except Exception:
+            text = " ".join(t for t, sc in eng.ocr(str(frame)) if float(sc) >= 0.6)
+        except Exception as e:                             # an unread frame is not a clean frame
             text = ""
+            status = worst(status, REVIEW); reasons.append(f"text in frame could not be read ({e.__class__.__name__})")
         if text:
             ts, hits = check_text(text)
             if ts != PASS:
