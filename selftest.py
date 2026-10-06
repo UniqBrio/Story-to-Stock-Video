@@ -49,7 +49,10 @@ def make_assets(d: Path) -> dict:
     ff("-f", "lavfi", "-i", "testsrc=size=1080x1920:rate=30", "-t", "3", "-pix_fmt", "yuv420p", str(a / "clip_short.mp4"))
     ff("-f", "lavfi", "-i", "smptehdbars=size=1080x1920:rate=30", "-t", "6", "-pix_fmt", "yuv420p", str(a / "clip_bars.mp4"))
     ff("-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30", "-t", "5", "-pix_fmt", "yuv420p", str(a / "demo_screen.mp4"))
-    ff("-f", "lavfi", "-i", "gradients=size=1080x1920:speed=0.01", "-frames:v", "1", str(a / "still.png"))
+    # deterministic gradient: content-safety clearances are keyed by file hash, and lavfi `gradients`
+    # draws different pixels on every run (even with a seed), so a regenerated still lost its clearance
+    ff("-f", "lavfi", "-i", "color=c=black:s=1080x1920,format=rgb24,geq=r='70+120*Y/H':g='110+90*X/W':b='190-80*Y/H'",
+       "-frames:v", "1", "-fflags", "+bitexact", "-flags", "+bitexact", str(a / "still.png"))
     # "speech": 220 Hz bursts 1.8s on / 1.2s off for 24s
     ff("-f", "lavfi", "-i", "sine=frequency=220:sample_rate=48000:duration=24",
        "-af", "volume='if(lt(mod(t\\,3)\\,1.8)\\,0.6\\,0)':eval=frame", str(a / "vo.wav"))
@@ -157,8 +160,8 @@ def main():
             fails.append(msg)
 
     print("\n══ assertions ══")
-    check(final.exists(), f"final export exists ({final.name})")
-    if final.exists():
+    check(final.is_file(), f"final export exists ({final.name or 'none'})")
+    if final.is_file():
         info = probe_video_info(final)
         expected = 26.0 - 1.0     # 7 shots = 26s, two 0.5s transitions overlap
         check(abs(info["duration"] - expected) < 0.35, f"duration {info['duration']:.2f}s ≈ {expected:.1f}s (transition overlaps respected)")
@@ -220,12 +223,12 @@ def main():
     check(fr == 2, f"fetcher exits 2 when a shot gets no asset (rc={fr})")
 
     # A missing source must stop the render instead of silently dropping the shot
-    before = final.stat().st_mtime if final.exists() else 0
+    before = final.stat().st_mtime if final.is_file() else 0
     Path(A["still"]).unlink(missing_ok=True)
     r2 = subprocess.run([sys.executable, str(HERE / "run_pipeline.py"), str(xlsx), "--from", "3", "--force", "--no-qa"],
                         capture_output=True, text=True, encoding="utf-8", errors="replace").returncode
     check(r2 != 0, f"pipeline stops when shot 004's source is missing (rc={r2})")
-    check((final.stat().st_mtime if final.exists() else 0) == before, "final export was not rewritten with a dropped shot")
+    check((final.stat().st_mtime if final.is_file() else 0) == before, "final export was not rewritten with a dropped shot")
 
     print("\n══ U-rated content-safety checks ══")
     import content_safety as safety
