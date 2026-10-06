@@ -16,7 +16,7 @@ sign-off before it is published.
   Text — on-screen overlays, VO script lines, captions, OCR text, transcripts
     • safety/blocklist.txt (+ blocklist_extra.txt): English, Tamil, Tanglish
   Sound — voiceover, music, BGM, sting and the final mix
-    • Whisper small (sherpa-onnx, ONNX) transcript → the text check
+    • Whisper small (ONNX, run on onnxruntime — safety/whisper_onnx.py) transcript → the text check
 
   Illustration-only subjects: a shot whose subject involves swimwear (swimming,
   bikini, beach, pool …) may only use cartoon / illustrated / animated visuals —
@@ -79,8 +79,10 @@ MODELS = {
         "keep": ["small-encoder.int8.onnx", "small-decoder.int8.onnx", "small-tokens.txt"],
     },
 }
+# Whisper runs on onnxruntime directly (safety/whisper_onnx.py), not the sherpa-onnx package: its unsigned
+# DLLs are blocked by Windows Smart App Control, while onnxruntime's wheel is Microsoft-signed.
 PACKAGES = {"numpy": "numpy", "PIL": "pillow", "onnxruntime": "onnxruntime", "regex": "regex",
-            "nudenet": "nudenet", "sherpa_onnx": "sherpa-onnx"}
+            "nudenet": "nudenet"}
 # OCR: rapidocr 3.x (any Python ≥ 3.8, models bundled in the wheel); rapidocr_onnxruntime (≤ 3.12) still works
 OCR_MODULES = ("rapidocr", "rapidocr_onnxruntime")
 
@@ -197,15 +199,27 @@ def _now() -> str:
 
 # ── Setup / dependency checks ─────────────────────────────────────────────────
 def missing_packages() -> list:
-    out = []
+    return package_problems()[0]
+
+
+def package_problems() -> tuple[list, list]:
+    """(missing, blocked). Blocked = installed, but Windows Application Control / Smart App Control
+    refuses to load its DLLs — reinstalling will not help, so it must not be reported as 'missing'."""
+    missing, blocked = [], []
     for mod, pipname in PACKAGES.items():
         try:
             __import__(mod)
-        except Exception:
-            out.append(pipname)
+        except Exception as e:
+            msg = str(e)
+            (blocked if ("Application Control" in msg or "DLL load failed" in msg) else missing).append(pipname)
     if not any(_importable(m) for m in OCR_MODULES):
-        out.append("rapidocr")
-    return out
+        missing.append("rapidocr")
+    return missing, blocked
+
+
+def _blocked_hint(blocked: list) -> str:
+    return (f"{', '.join(blocked)} is installed but Windows is blocking its DLLs (Smart App Control / Application "
+            f"Control — see Windows Security > App & browser control). Reinstalling will not fix this.")
 
 
 def _importable(mod: str) -> bool:
@@ -259,9 +273,11 @@ def missing_models(mdir: Path | None = None) -> list:
 def readiness(project: dict | None = None) -> list:
     """Human-readable blockers; empty list = the gate can run."""
     issues = []
-    pk = missing_packages()
+    pk, blocked = package_problems()
     if pk:
         issues.append(f"Python packages missing: {', '.join(pk)} — pip install -r requirements.txt")
+    if blocked:
+        issues.append(_blocked_hint(blocked))
     mm = missing_models(models_dir(project))
     if mm:
         issues.append(f"Safety models missing in {models_dir(project)}: {', '.join(mm)} — run: python content_safety.py --setup")
@@ -294,9 +310,12 @@ def _download(url: str, dest: Path, sha: str) -> None:
 
 def setup(mdir: Path) -> int:
     print(f"\n  Content-safety models → {mdir}\n")
-    pk = missing_packages()
+    pk, blocked = package_problems()
     if pk:
         print(f"  ❌  Install the Python packages first: pip install -r requirements.txt   (missing: {', '.join(pk)})")
+    if blocked:
+        print(f"  ❌  {_blocked_hint(blocked)}")
+    if pk or blocked:
         return 4
     c = mdir / MODELS["clip"]["dir"]
     for name, (url, sha) in MODELS["clip"]["files"].items():
@@ -502,14 +521,13 @@ class Engines:
         return self._ocr
 
     def asr(self, language: str):
-        import sherpa_onnx
         if self._asr is None:
             self._asr = {}
         if language not in self._asr:
-            d = self.mdir / MODELS["whisper"]["dir"]
-            self._asr[language] = sherpa_onnx.OfflineRecognizer.from_whisper(
-                encoder=str(d / "small-encoder.int8.onnx"), decoder=str(d / "small-decoder.int8.onnx"),
-                tokens=str(d / "small-tokens.txt"), language=language, task="transcribe", num_threads=self.threads)
+            sys.path.insert(0, str(HERE / "safety"))
+            from whisper_onnx import WhisperOnnx
+            self._asr[language] = WhisperOnnx(self.mdir / MODELS["whisper"]["dir"], prefix="small",
+                                              language=language, threads=self.threads)
         return self._asr[language]
 
 
@@ -658,10 +676,7 @@ def transcribe(eng: Engines, path: Path, languages: list[str], window=None) -> d
             chunk = audio[i:i + step]
             if chunk.size < 8000 or float(np.abs(chunk).max()) < 1e-3:
                 continue
-            s = rec.create_stream()
-            s.accept_waveform(16000, chunk)
-            rec.decode_stream(s)
-            parts.append(s.result.text.strip())
+            parts.append(rec.transcribe(chunk))
         out[lang or "auto"] = " ".join(p for p in parts if p)
     return out
 

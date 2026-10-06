@@ -143,12 +143,23 @@ class Pictures(unittest.TestCase):
         self.assertTrue(any("visible text" in x for x in r["reasons"]))
 
 
-@unittest.skipUnless(MODELS_READY and shutil.which("espeak-ng"), "needs the safety models and espeak-ng")
+def _speak(text: str, wav: Path) -> None:
+    """Synthesize test speech: espeak-ng where installed, otherwise the built-in Windows voice (SAPI)."""
+    if shutil.which("espeak-ng"):
+        subprocess.run(["espeak-ng", "-v", "en", "-w", str(wav), text], check=True)
+    else:
+        ps = ("Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+              f"$s.SetOutputToWaveFile('{wav}'); $s.Speak('{text}'); $s.Dispose()")
+        subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=True, capture_output=True)
+
+
+@unittest.skipUnless(MODELS_READY and (shutil.which("espeak-ng") or sys.platform == "win32"),
+                     "needs the safety models and espeak-ng (or Windows)")
 class Speech(unittest.TestCase):
     def test_spoken_words_are_checked(self):
         with tempfile.TemporaryDirectory() as d:
             wav = Path(d) / "vo.wav"
-            subprocess.run(["espeak-ng", "-v", "en", "-w", str(wav), "Join now for the sexy summer party"], check=True)
+            _speak("Join now for the sexy summer party", wav)
             eng = cs.Engines(cs.models_dir())
             tr = cs.transcribe(eng, wav, [""])
             self.assertIn("sexy", tr["auto"].lower())
