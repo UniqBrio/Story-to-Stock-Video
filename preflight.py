@@ -7,7 +7,7 @@ missing key, font or file stops the run up front instead of producing a
 quietly broken video.
 
   Critical (exit 1) : ffmpeg/ffprobe or the drawtext filter missing ·
-                      Tamil overlay text with no Tamil font, or an FFmpeg that cannot shape Tamil ·
+                      Tamil overlay text with no Tamil font, or an FFmpeg whose libass cannot shape Tamil ·
                       stock shots still to fetch but no provider key ·
                       T4 product insert file missing · vo_path set but missing
   Critical (safety) : safety models / packages missing · on-screen text or VO line that fails the U-rated
@@ -91,8 +91,8 @@ def main():
                     f"(fonts/NotoSansTamil-Bold.ttf is bundled; check it is present)")
     if tamil_ids and tamil_font and not missing_tools and not ffmpeg_text_shaping(tamil_font):
         render_crit.append(f"Tamil text on {', '.join(tamil_ids)} but this FFmpeg cannot shape Tamil — vowel signs "
-                           f"like ை would be drawn on the wrong side of the letter (misspelled on screen). "
-                           f"Install a current full FFmpeg build with HarfBuzz (gyan.dev 'full' on Windows); FFmpeg 6.1 fails this check")
+                           f"like ை would be drawn on the wrong side of the letter (misspelled on screen). Tamil is "
+                           f"drawn with libass: install an FFmpeg built with --enable-libass (gyan.dev 'full' on Windows)")
 
     # ── Shots / sources ───────────────────────────────────────────────────────
     to_fetch = []

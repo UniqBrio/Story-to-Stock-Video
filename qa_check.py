@@ -241,9 +241,13 @@ def main():
     tamil_shots = [m["shot_id"] for m in manifest if m.get("tamil")]
     tamil_font = find_font("", tamil=True, fonts_folder=text_cfg.get("fonts_folder") or None,
                            tamil_preferred=text_cfg.get("font_tamil", ""))
-    if tamil_shots and tamil_font and not ffmpeg_text_shaping(tamil_font):
+    unshaped = [m["shot_id"] for m in manifest if m.get("tamil") and m.get("renderer") != "libass"]
+    if unshaped:
+        R.add("critical", "fonts", f"Tamil overlays on {', '.join(unshaped)} were drawn by drawtext, which cannot shape "
+                                   f"Tamil — vowel signs such as ை sit on the wrong side. Re-render phase 5 with --force")
+    elif tamil_shots and tamil_font and not ffmpeg_text_shaping(tamil_font):
         R.add("critical", "fonts", f"Tamil overlays on {', '.join(tamil_shots)} were drawn without text shaping — "
-                                   f"vowel signs such as ை sit on the wrong side (install a current full FFmpeg build; 6.1 fails this)")
+                                   f"vowel signs such as ை sit on the wrong side (FFmpeg needs libass: gyan.dev 'full' build)")
     latin_fonts = sorted({m["font"] for m in manifest if not m.get("tamil") and m.get("font") != "ffmpeg-default"})
     off_brand = [f for f in latin_fonts if not font_is_family(f, brand_font)]
     if off_brand:

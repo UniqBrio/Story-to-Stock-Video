@@ -14,7 +14,8 @@ tamil-text-overlay-typography · README §2):
   • Fit      : PIL-measured auto-wrap + shrink so nothing is ever clipped; ≤ 2 lines
                (3 on cards); 380px legibility floor (≥ 46px at 1080 wide)
   • Safe zones: Instagram header / caption+actions / right rail are never used
-  • Tamil    : detected per line → Noto Sans Tamil → Nirmala UI; one drawtext per line
+  • Tamil    : detected per line → Noto Sans Tamil → Nirmala UI; drawn by libass (`ass` filter),
+               because drawtext never reorders pre-base vowel signs (கை would read க + ை)
   • Logo     : end_only (default — the T5 card carries the logo) · bug · both · none;
                a bug never appears on cards, and per-shot Logo Bug yes/no overrides
   • Restraint: one element at a time — overlays on T4 product inserts are dropped
@@ -32,7 +33,9 @@ from pathlib import Path
 from svos_common import (load_project, save_project, check_ffmpeg, run_ff, probe_video_info,
                          compute_timeline, shot_kind, shot_treatment, find_font, ff_font_arg,
                          ff_escape_text, fit_text, measure_text, is_tamil, is_light, hex_to_ff,
-                         hex_clean, safe_zones, words, banner, set_log, output_dir, BRAND)
+                         hex_clean, safe_zones, words, banner, set_log, output_dir, BRAND,
+                         font_family, ass_color, ass_escape, ass_document, ass_time, ass_filter,
+                         ass_size_scale, stage_ass_fonts)
 
 STYLE = {
     #            size×   lines  upper  default pos      anim-in  anim-out
@@ -74,8 +77,10 @@ def block_position(position: str, style: str, block_h: int, tw: int, th: int, sz
     return "(w-text_w)/2", (th - block_h) // 2          # center
 
 
-def build_overlays(project: dict, timeline: list[dict]) -> tuple[list[str], list[dict], list[str]]:
-    """Returns (drawtext filter strings, manifest rows, audit notes)."""
+def build_overlays(project: dict, timeline: list[dict],
+                   ass_dir: Path | None = None) -> tuple[list[str], list[dict], list[str]]:
+    """Returns (filter strings, manifest rows, audit notes). Latin lines → drawtext; Tamil lines →
+    one tamil_overlays.ass in ass_dir, burned by a trailing `ass=` filter."""
     tw, th = project.get("width", 1080), project.get("height", 1920)
     tcfg = project.get("text", {})
     base_size = int(tcfg.get("size_default", 72))
@@ -92,6 +97,7 @@ def build_overlays(project: dict, timeline: list[dict]) -> tuple[list[str], list
     tl_by_id = {t["shot_id"]: t for t in timeline}
 
     filters, manifest, audit = [], [], []
+    ass_events = []
     for shot in project["shots"]:
         text = (shot.get("text_overlay") or "").strip()
         if not text:
@@ -171,7 +177,15 @@ def build_overlays(project: dict, timeline: list[dict]) -> tuple[list[str], list
             alpha_expr = (f"if(lt(t\\,{abs_start:.3f})\\,0\\,if(gt(t\\,{abs_end:.3f})\\,0\\,"
                           f"min(min(1\\,(t-{abs_start:.3f})/{a_in:.2f})\\,min(1\\,({abs_end:.3f}-t)/{a_out:.2f}))))")
 
+        if tamil and font:
+            ass_events += _ass_lines(lines, font, size, color, style, anim, a_in, a_out, abs_start, abs_end,
+                                     x_expr, top_y, line_h, line_gap, tw, use_shadow, box_mode)
+            lines_drawn = True
+        else:
+            lines_drawn = False
         for i, ln in enumerate(lines):
+            if lines_drawn:
+                break
             y0 = top_y + i * (line_h + line_gap)
             if anim == "rise":
                 y_expr = f"{y0}+40*pow(1-min((t-{abs_start:.3f})/{a_in + 0.05:.2f}\\,1)\\,2)"
@@ -195,8 +209,51 @@ def build_overlays(project: dict, timeline: list[dict]) -> tuple[list[str], list
         manifest.append({"shot_id": sid, "treatment": shot_treatment(shot), "style": style, "anim": anim,
                          "lines": lines, "font": Path(font).name if font else "ffmpeg-default",
                          "size": size, "color": color, "position": position,
-                         "start": abs_start, "end": abs_end, "tamil": tamil})
+                         "start": abs_start, "end": abs_end, "tamil": tamil,
+                         "renderer": "libass" if lines_drawn else "drawtext"})
+    if ass_events:
+        ass_dir = Path(ass_dir or ".")
+        ass_path = ass_dir / "tamil_overlays.ass"
+        ass_path.parent.mkdir(parents=True, exist_ok=True)
+        ass_path.write_text(ass_document(tw, th, ass_events), encoding="utf-8")
+        filters.append(ass_filter(ass_path, stage_ass_fonts(font_tamil, ass_dir / "ass_fonts")))
     return filters, manifest, audit
+
+
+def _ass_lines(lines, font, size, color, style, anim, a_in, a_out, start, end,
+               x_expr, top_y, line_h, line_gap, tw, use_shadow, box_mode) -> list[str]:
+    """ASS Dialogue lines that mirror the drawtext styling: same size, colour, position,
+    shadow / border / plate, and the same fade · rise · pop motion."""
+    fs = size * ass_size_scale(font)
+    centred = "text_w" in str(x_expr)
+    x = tw // 2 if centred else int(str(x_expr))
+    c, _ = ass_color(color)
+    tags = [f"\\an{8 if centred else 7}", f"\\fn{font_family(font)}", f"\\fs{fs:.1f}", "\\b1", f"\\1c{c}"]
+    box = style != "card" and (box_mode == "always" or (box_mode == "auto" and style == "caption" and not use_shadow))
+    if style == "card" or box:
+        tags += ["\\shad0"] + ([] if box else ["\\bord0"])
+    else:
+        tags += ["\\shad0"]
+        if use_shadow:
+            sc, sa = ass_color("#000000", 0.55)
+            tags += ["\\xshad3", "\\yshad4", f"\\4c{sc}", f"\\4a{sa}"]
+        if style == "keyword":
+            bc, ba = ass_color("#000000", 0.35)
+            tags += ["\\bord2", f"\\3c{bc}", f"\\3a{ba}"]
+        else:
+            tags += ["\\bord0"]
+    if anim != "none":
+        tags.append(f"\\fad({int(a_in * 1000)},{int(a_out * 1000)})")
+    out = []
+    for i, ln in enumerate(lines):
+        y0 = top_y + i * (line_h + line_gap)
+        if anim == "rise":
+            place = f"\\move({x},{y0 + 40},{x},{y0},0,{int((a_in + 0.05) * 1000)})"
+        else:
+            place = f"\\pos({x},{y0})"
+        out.append(f"Dialogue: 0,{ass_time(start)},{ass_time(end)},{'Box' if box else 'Base'},,0,0,0,,"
+                   f"{{{''.join(tags)}{place}}}{ass_escape(ln)}")
+    return out
 
 
 def logo_windows(project: dict, timeline: list[dict]) -> list[tuple[float, float]]:
@@ -282,7 +339,7 @@ def main():
         sys.exit(1)
 
     timeline = project.get("timeline") or compute_timeline(project["shots"])
-    filters, manifest, audit = build_overlays(project, timeline)
+    filters, manifest, audit = build_overlays(project, timeline, ass_dir=out_file.parent)
     audit += restraint_audit(project, manifest)
 
     logo_cfg = project.get("logo", {})

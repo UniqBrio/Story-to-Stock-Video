@@ -175,6 +175,7 @@ def main():
     check(set(ids) == {"001", "002", "004", "006", "007"}, f"overlays rendered for {ids}")
     tam = next((m for m in man if m["shot_id"] == "006"), None)
     check(bool(tam and tam["tamil"] and is_tamil_font(tam["font"])), f"Tamil overlay uses a Tamil font ({tam['font'] if tam else '-'})")
+    check(bool(tam and tam.get("renderer") == "libass"), f"Tamil overlay is shaped by libass ({tam.get('renderer') if tam else '-'})")
     latin = sorted({m["font"] for m in man if not m["tamil"]})
     check(bool(latin) and all(font_is_family(f, "Inter") for f in latin), f"Latin overlays use the bundled brand font ({', '.join(latin)})")
     card = next((m for m in man if m["shot_id"] == "002"), None)
@@ -183,7 +184,7 @@ def main():
     check(len(ar.get("duck_segments", [])) >= 5, f"duck map found {len(ar.get('duck_segments', []))} spoken phrases")
     check(any("sting" in l for l in ar.get("layers", [])), "end sting placed")
     mf = Path(proj.get("render_manifest", ""))
-    if mf.exists():
+    if mf.is_file():
         m = json.loads(mf.read_text(encoding="utf-8"))
         li = m.get("loudness", {}).get("integrated_lufs")
         check(li is not None and abs(li - (-14)) < 1.5, f"integrated loudness {li} LUFS (target −14 ±1.5)")

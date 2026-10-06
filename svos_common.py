@@ -8,6 +8,7 @@ Shared helpers for every render-layer script (SVOS v2 render layer).
     • project.json load / save        • brand palette + safe zones
     • font resolution (Latin + Tamil) • text measurement / auto-fit (PIL)
     • drawtext escaping               • timeline maths (transition overlaps)
+    • libass (.ass) text for Tamil    — drawtext cannot shape it
     • shot "kind" resolution          (T1 card · T2/T3 stock · T4 product · T5 logo card)
 
 Import from any stage:   from svos_common import *
@@ -101,32 +102,121 @@ def check_ffmpeg() -> None:
                  "    Download https://ffmpeg.org/download.html and add ffmpeg/bin to PATH")
 
 _SHAPING: dict = {}
+_ASS_SCALE: dict = {}
+
+# ── Complex-script text via libass ───────────────────────────────────────────
+# FFmpeg's drawtext hands HarfBuzz a Latin script hint, so Tamil pre-base vowel
+# signs (ெ ே ை ொ ோ ௌ) are never reordered: 'கை' comes out as 'க' + 'ை' — misspelled
+# on screen with any font, any FFmpeg version. libass (FFmpeg's `ass` filter)
+# detects the script per run and shapes Tamil correctly, so Tamil overlays are
+# written as an .ass file and burned with `ass=`; Latin text stays on drawtext.
+
+def font_family(font_path: str) -> str:
+    """Family name libass matches on, read from the font file ('Noto Sans Tamil')."""
+    try:
+        from PIL import ImageFont
+        return ImageFont.truetype(font_path, 20).getname()[0]
+    except Exception:
+        return Path(font_path).stem.split("-")[0]
+
+def ass_color(hex_color: str, opacity: float = 1.0) -> tuple[str, str]:
+    """'#RRGGBB', opacity → ('&HBBGGRR&', '&HAA&') for ASS colour / alpha override tags."""
+    h = hex_clean(hex_color).lstrip("#")
+    a = max(0, min(255, round(255 * (1.0 - opacity))))
+    return f"&H{h[4:6]}{h[2:4]}{h[0:2]}&".upper(), f"&H{a:02X}&"
+
+def ass_escape(text: str) -> str:
+    """Plain text for an ASS Dialogue line: braces start override blocks, backslash starts escapes."""
+    return text.replace("\\", "\uFF3C").replace("{", "(").replace("}", ")").replace("\n", " ")
+
+def ass_document(play_w: int, play_h: int, events: list[str]) -> str:
+    """A complete .ass file. PlayRes = frame size, so ASS units are pixels. No wrapping —
+    lines are already fitted by fit_text(). 'Box' style = BorderStyle 3 (opaque plate)."""
+    fmt = ("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, "
+           "Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, "
+           "MarginL, MarginR, MarginV, Encoding")
+    return "\n".join([
+        "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {play_w}", f"PlayResY: {play_h}",
+        "WrapStyle: 2", "ScaledBorderAndShadow: yes", "",
+        "[V4+ Styles]", fmt,
+        "Style: Base,Arial,72,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1",
+        "Style: Box,Arial,72,&H00FFFFFF,&H00FFFFFF,&H6B000000,&H6B000000,-1,0,0,0,100,100,0,0,3,18,0,7,0,0,0,1",
+        "", "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+        *events, ""])
+
+def ass_time(t: float) -> str:
+    t = max(0.0, t)
+    cs = int(round(t * 100))
+    return f"{cs // 360000}:{cs // 6000 % 60:02d}:{cs // 100 % 60:02d}.{cs % 100:02d}"
+
+def stage_ass_fonts(font_path: str, dest_dir: Path) -> Path:
+    """Copy one font into its own folder for `ass=fontsdir=` — pointing libass at C:/Windows/Fonts
+    would make it load every installed font on each render."""
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    target = dest_dir / Path(font_path).name
+    if not target.exists() or target.stat().st_size != Path(font_path).stat().st_size:
+        shutil.copy2(font_path, target)
+    return dest_dir
+
+def ass_filter(ass_path: Path, fonts_dir: Path) -> str:
+    return f"ass=filename='{ff_font_arg(str(ass_path))}':fontsdir='{ff_font_arg(str(fonts_dir))}'"
+
+def _render_ass_gray(font_path: str, text: str, fs: float, W: int, H: int, ffmpeg: str = "ffmpeg") -> bytes:
+    """One white-on-black grey frame of `text` drawn by libass at the top-left (10, 10)."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        fonts = stage_ass_fonts(font_path, d / "fonts")
+        ev = (f"Dialogue: 0,{ass_time(0)},{ass_time(5)},Base,,0,0,0,,"
+              f"{{\\an7\\pos(10,10)\\fn{font_family(font_path)}\\fs{fs:.1f}\\bord0\\shad0}}{ass_escape(text)}")
+        (d / "probe.ass").write_text(ass_document(W, H, [ev]), encoding="utf-8")
+        r = subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+                            "-i", f"color=black:s={W}x{H}", "-frames:v", "1",
+                            "-vf", ass_filter(d / "probe.ass", fonts), "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+                           capture_output=True, timeout=60)
+    return r.stdout if r.returncode == 0 and len(r.stdout) == W * H else b""
+
+def ass_size_scale(font_path: str, ffmpeg: str = "ffmpeg") -> float:
+    """ASS font size per drawtext/PIL pixel size. libass sizes a font by its ascender+descender,
+    PIL and drawtext by the em, so the same number draws smaller in libass. Measured once per
+    font by comparing the ink height of 'க' at size 100."""
+    key = (ffmpeg, font_path)
+    if key in _ASS_SCALE:
+        return _ASS_SCALE[key]
+    scale = 1.0
+    try:
+        from PIL import ImageFont
+        box = ImageFont.truetype(font_path, 100).getbbox("\u0B95")
+        pil_h = box[3] - box[1]
+        W, H = 300, 260
+        g = _render_ass_gray(font_path, "\u0B95", 100, W, H, ffmpeg)
+        rows = [y for y in range(H) if any(g[y * W + x] > 128 for x in range(W))] if g else []
+        if rows and pil_h > 0:
+            scale = pil_h / (rows[-1] - rows[0] + 1)
+    except Exception:
+        pass
+    _ASS_SCALE[key] = scale
+    return scale
 
 def ffmpeg_text_shaping(font_path: str = "", ffmpeg: str = "ffmpeg") -> bool:
     """
-    True if this FFmpeg's drawtext really shapes Tamil. Without shaping, pre-base
-    vowel signs (ெ ே ை ொ ோ ௌ) are drawn AFTER the consonant, so 'நம்பிக்கை' is
-    misspelled on screen even with the right font. FFmpeg 6.1 exposes a
-    text_shaping option yet still gets this wrong, so the option proves nothing.
-    Functional probe: draw 'க' alone and 'கை' at the same x, then find where the
-    lone 'க' lines up inside 'கை'. Unshaped it sits at offset ~0 (sign drawn after);
-    shaped it is pushed right by the width of the pre-base sign ை.
+    True if this FFmpeg draws Tamil correctly the way overlay_engine draws it (libass).
+    Without shaping, pre-base vowel signs (ெ ே ை ொ ோ ௌ) are drawn AFTER the consonant, so
+    'நம்பிக்கை' is misspelled on screen even with the right font.
+    Functional probe: draw 'க' alone and 'கை' at the same x, then find where the lone
+    'க' lines up inside 'கை'. Unshaped it sits at offset ~0 (sign drawn after); shaped
+    it is pushed right by the width of the pre-base sign ை.
     """
     font = font_path or find_font("", tamil=True)
     key = (ffmpeg, font)
     if key in _SHAPING:
         return _SHAPING[key]
-    W, H = 200, 100
-    def frame(text: str) -> bytes:
-        vf = f"drawtext=fontfile='{ff_font_arg(font)}':text='{text}':fontsize=64:fontcolor=white:x=10:y=10"
-        r = subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi",
-                            "-i", f"color=black:s={W}x{H}", "-frames:v", "1", "-vf", vf,
-                            "-f", "rawvideo", "-pix_fmt", "gray", "-"], capture_output=True, timeout=30)
-        return r.stdout if r.returncode == 0 and len(r.stdout) == W * H else b""
+    W, H = 200, 120
     ok = False
     if font and Path(font).exists():
         try:
-            ka, kai = frame("\u0B95"), frame("\u0B95\u0BC8")
+            ka, kai = (_render_ass_gray(font, t, 64, W, H, ffmpeg) for t in ("\u0B95", "\u0B95\u0BC8"))
             ink = [(x, y) for y in range(H) for x in range(W) if ka and ka[y * W + x] > 128]
             if ink and kai:
                 glyph_w = max(x for x, _ in ink) - min(x for x, _ in ink) + 1

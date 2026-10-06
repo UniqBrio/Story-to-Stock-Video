@@ -29,9 +29,9 @@ You fill in one Excel workbook and the pipeline produces:
 | Tool | Version | How to check |
 |---|---|---|
 | Python | 3.10 – 3.13 | `python --version` |
-| FFmpeg **full** build (includes ffprobe, libfreetype, HarfBuzz) | current release, not 6.1 | `ffmpeg -version` |
+| FFmpeg **full** build (includes ffprobe, libfreetype, libass) | current release | `ffmpeg -version` |
 
-For FFmpeg on Windows, download the "full" build from gyan.dev, unzip it, and add its `bin` folder to your `PATH`. Do not use FFmpeg 6.1: it draws Tamil vowel signs on the wrong side.
+For FFmpeg on Windows, download the "full" build from gyan.dev, unzip it, and add its `bin` folder to your `PATH`. The "essentials" build lacks libass, which draws the Tamil text; preflight tells you if it's missing.
 
 ### 1.2 Install the Python packages
 
