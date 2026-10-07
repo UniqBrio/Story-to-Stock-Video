@@ -124,7 +124,7 @@ Column A holds the setting name and column B its value. Values start on row 3. T
 | `output_folder` | `C:\VideoProjects\Output` | Where the final video goes |
 | `assets_folder` | `C:\VideoProjects\Assets` | Where downloads go |
 | `output_filename` | `academy_reel.mp4` | |
-| `vo_path` | `C:\VideoProjects\VO\academy_vo.mp3` | Your recorded voiceover. Leave blank for a music-only video |
+| `vo_path` | `C:\VideoProjects\VO\academy_vo.mp3` | Your recorded voiceover. Record it naturally, with pauses between sentences: the pipeline fits it to the shots (see Part 5). Leave blank for a music-only video |
 | `logo_path` | `C:\VideoProjects\Brand\logo.png` | A transparent PNG works best. Keep your other logo versions (white, black, colour) in the **same folder**: if part of this logo would blend into the background, the most visible version is used automatically |
 | `text_font` | `Inter` | The bundled brand font. If this says `Arial`, Arial is what you'll get |
 | `music_path` / `bgm_path` | *(optional)* | Background music. Leave blank if you have none |
@@ -322,6 +322,7 @@ The pipeline stops on purpose instead of producing a broken video. The last line
 - **`--force` re-renders; it never re-downloads.** `--refetch` re-downloads everything and discards your picks, so use it rarely.
 - **Swimming, beach, pool and swimwear shots are cartoon-only.** These subjects are searched only in illustrations, and any real photo of them fails the safety check.
 - **Tamil text works**, using the bundled Noto Sans Tamil. Tamil speech transcription is approximate, so the safety report asks you to listen to the VO yourself before signing off.
+- **The voiceover is fitted to the shots for you.** Record naturally; you don't need to match the video's timing. After preflight, the pipeline finds each spoken phrase, works out which shot it belongs to (in order, using the **VO Line** column if filled, otherwise the on-screen text and scene description), shortens long pauses, and lengthens any shot too short for its words. Shots are never shortened. The result is printed as a timing map and saved to `<output_folder>\vo_timing.md`. If the pipeline can't tell confidently which words go with which shot, it stops **before** fetching or rendering and asks you. Either fill the VO Line column for the shots it names (it suggests the text) and rerun, or accept its plan with `--accept-vo`.
 - **The logo picks itself for visibility.** If any part of your logo would disappear against the logo card colour (for example a purple "U" on a purple card), the most visible transparent version from the same folder is used instead. Phase 1 tells you when this happens. For the corner logo (`logo_mode` = `bug`), the footage behind it is sampled. Logos with their own solid background are always used as you chose them.
 - **Keep the workbook closed** in Excel while the pipeline runs.
 

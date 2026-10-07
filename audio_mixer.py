@@ -120,13 +120,40 @@ def mix(project: dict, video_path: Path, out_path: Path, tmp: Path) -> dict | No
 
     vo, music, bgm, sting = layer("vo_path"), layer("music_path"), layer("bgm_path"), layer("sting_path")
 
+    # Voiceover timing plan from vo_aligner: each phrase is cut from the (cleared, untouched) VO file and
+    # placed under its shot. Ignored if the VO file changed since the plan was made.
+    plan = project.get("vo_plan") or {}
+    placed = plan.get("placements") if (vo and plan.get("source") == vo and
+                                        abs(plan.get("source_mtime", 0) - Path(vo).stat().st_mtime) < 1) else None
+
     # Speech map first — it drives the ducking on the music layers
-    segments = detect_speech(vo, vo_start, total) if vo else []
+    if placed:
+        segments = [(round(p["at"], 3), round(min(total, p["at"] + p["src_end"] - p["src_start"]), 3))
+                    for p in placed if p["at"] < total]
+    else:
+        segments = detect_speech(vo, vo_start, total) if vo else []
     duck = duck_expression(segments, duck_db) if (vo and (music or bgm)) else ""
     report["duck_segments"] = segments
     report["duck_db"] = duck_db if duck else 0
 
-    if vo:
+    if vo and placed:
+        n = len(placed)
+        vol = float(a.get("vo_volume", 1.0))
+        chain = [f"[{idx}:a]aresample=48000,aformat=channel_layouts=stereo,volume={vol:.2f},asplit={n}" +
+                 "".join(f"[vs{k}]" for k in range(n))]
+        for k, p in enumerate(placed):
+            d = p["src_end"] - p["src_start"]
+            s0, s1 = max(0.0, p["src_start"] - 0.06), p["src_end"] + 0.12          # keep consonant edges
+            chain.append(f"[vs{k}]atrim={s0:.3f}:{s1:.3f},asetpts=PTS-STARTPTS,"
+                         f"afade=t=in:d=0.03,afade=t=out:st={max(0.0, s1 - s0 - 0.05):.3f}:d=0.05,"
+                         f"adelay={int(max(0.0, p['at'] - 0.06) * 1000)}:all=1[vp{k}]")
+        chain.append("".join(f"[vp{k}]" for k in range(n)) +
+                     f"amix=inputs={n}:normalize=0:dropout_transition=0,apad,atrim=0:{total:.3f},asetpts=PTS-STARTPTS[vo]")
+        graph.extend(chain)
+        inputs += ["-i", vo]; mix_labels.append("[vo]"); idx += 1
+        report["layers"].append({"vo": Path(vo).name, "aligned_phrases": n, "speech_segments": len(segments)})
+        print(f"    🎙  VO   {Path(vo).name}  ({n} phrases placed on their shots → duck {duck_db:g} dB)")
+    elif vo:
         vo_dur = probe_duration(vo)
         if vo_dur + vo_start > total + 0.3:
             print(f"    ⚠️  VO is {vo_dur:.1f}s (+{vo_start}s offset) but the video is {total:.1f}s — VO will be cut")

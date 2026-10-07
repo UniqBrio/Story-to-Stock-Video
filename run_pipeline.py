@@ -9,6 +9,7 @@ Single entry point — runs every phase in sequence.
 Phases:
     1  story_reader        Excel → project.json (+ validation, restraint audit)
        preflight           Keys · fonts · FFmpeg · referenced files — critical findings stop the run
+       vo_aligner          Fit the voiceover to the shots (phrase → shot); asks only when unsure
     2  asset_fetcher       Stock assets (skipped for cards / product inserts)
     3  clip_normaliser     Exact-duration clips · cards · grades · Ken Burns
     4  transition_engine   Single-pass assembly + authoritative timeline
@@ -33,6 +34,7 @@ Options:
     --no-qa           Skip phase 8
     --preflight       Run phase 1 + preflight checks only, then stop
     --allow-drop      Phases 3–4: continue when a shot has no source (video gets shorter than the plan)
+    --accept-vo       Use the voiceover timing plan even if the aligner asked a question
     --shot ID         Phase 3 only: normalise a single shot
     --contact-sheet N Stage-4 gate: run phase 1, gather N candidates/shot → contact_sheet.html, STOP for G4
     --apply-picks F   Download the G4 picks from F (picks.json), then continue with phases 3–8
@@ -89,6 +91,14 @@ def run_preflight(proj_json: Path, extra: list[str]) -> int:
     return run_script("preflight", [str(proj_json)] + extra)
 
 
+def run_vo_aligner(proj_json: Path, accept: bool) -> int:
+    print(f"\n{'═'*62}\n  VOICEOVER — fit the spoken phrases to the shots\n{'═'*62}")
+    rc = run_script("vo_aligner", [str(proj_json)] + (["--accept"] if accept else []))
+    if rc == 3:
+        print("\n  ❔  Answer the question above (fill VO Line in the sheet), or rerun with --accept-vo")
+    return rc
+
+
 def banner(phase: int, label: str):
     print(f"\n{'═'*62}\n  PHASE {phase} — {label}\n{'═'*62}")
 
@@ -123,6 +133,7 @@ def main():
     ap.add_argument("--no-qa", action="store_true")
     ap.add_argument("--preflight", action="store_true", help="Run phase 1 + preflight checks, then stop")
     ap.add_argument("--allow-drop", action="store_true", help="Phases 3–4: tolerate shots with no source")
+    ap.add_argument("--accept-vo", action="store_true", help="Accept the VO timing plan even if it asks a question")
     ap.add_argument("--shot", default=None)
     ap.add_argument("--contact-sheet", type=int, default=0, metavar="N")
     ap.add_argument("--apply-picks", default=None, metavar="PICKS_JSON")
@@ -166,6 +177,8 @@ def main():
         if run_script("story_reader", [str(xlsx_path), "--out", str(proj_json)]) != 0:
             sys.exit(1)
         if run_preflight(proj_json, ["--need-keys"]) != 0:
+            sys.exit(1)
+        if run_vo_aligner(proj_json, args.accept_vo) != 0:       # shot lengths decide which clips are long enough
             sys.exit(1)
         banner(2, "Gather candidates → contact sheet (G4)")
         rc = run_script("asset_fetcher", [str(proj_json), "--candidates", str(args.contact_sheet)])
@@ -214,6 +227,11 @@ def main():
             if rc != 0:
                 print("\n  ❌  Preflight found critical issues — nothing was fetched or rendered")
                 failed = "preflight"
+                break
+            rc = run_vo_aligner(proj_json, args.accept_vo)
+            run_log.append({"phase": "vo-align", "script": "vo_aligner", "rc": rc, "seconds": 0})
+            if rc != 0:
+                failed = "vo"
                 break
         script, label = PHASES[phase]
         banner(phase, label)
@@ -278,6 +296,9 @@ def main():
     if failed == "preflight":
         print("  ❌  Pipeline stopped at PREFLIGHT — fix the critical items above, then rerun")
         sys.exit(1)
+    if failed == "vo":
+        print("  ❔  Stopped before rendering — the voiceover aligner has a question (see above / Output/vo_timing.md)")
+        sys.exit(3)
     if failed == "safety":
         print("  🛡   Pipeline stopped at the CONTENT-SAFETY gate — see Output/safety/assets_report.html")
         sys.exit(1)

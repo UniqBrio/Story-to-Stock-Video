@@ -40,6 +40,7 @@ Phases run in sequence:
 |---|-------|--------------|
 | 1 | `story_reader` | Excel → `project.json` (+ validation, restraint audit) |
 | — | `preflight` | Keys · fonts · FFmpeg · referenced files — critical findings stop the run |
+| — | `vo_aligner` | Fits a naturally recorded voiceover to the shots: phrases matched to shots in order, long pauses shortened, short shots lengthened. Asks only when unsure (`--accept-vo` to proceed) |
 | 2 | `asset_fetcher` | Stock assets (skipped for cards / product inserts) |
 | 3 | `clip_normaliser` | Exact-duration clips · cards · grades · Ken Burns |
 | 4 | `transition_engine` | Single-pass assembly + authoritative timeline |
