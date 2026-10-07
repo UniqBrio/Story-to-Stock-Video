@@ -29,3 +29,11 @@ desktop.ini
 
 # --- Local model weights (python content_safety.py --setup) ---
 .models/
+
+# --- Pipeline run outputs (downloaded stock, API/safety caches, G4 contact sheet) ---
+Assets/
+candidates.json
+contact_sheet.html
+picks.json
+review.json
+validation_report.html
