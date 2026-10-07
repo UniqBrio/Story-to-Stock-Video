@@ -87,6 +87,12 @@ PACKAGES = {"numpy": "numpy", "PIL": "pillow", "onnxruntime": "onnxruntime", "re
 OCR_MODULES = ("rapidocr", "rapidocr_onnxruntime")
 
 
+def _sfx(project: dict | None) -> str:
+    """Report-file suffix for the A/B variant render ('' for the main render)."""
+    v = str((project or {}).get("variant") or "").strip()
+    return f"_{v}" if v else ""
+
+
 def models_dir(project: dict | None = None) -> Path:
     d = (project or {}).get("safety", {}).get("models_dir") or os.environ.get("SVOS_MODELS_DIR") or (HERE / ".models")
     return Path(d)
@@ -766,6 +772,9 @@ def asset_items(project: dict) -> list[dict]:
             if logo:
                 add({"kind": "media", "role": "logo", "shot_id": sid, "label": f"Shot {sid} logo card",
                      "path": logo, "illustration_only": False, "window": None})
+        if s.get("cta_chip"):
+            add({"kind": "text", "role": "on-screen text", "shot_id": sid, "label": f"Shot {sid} CTA chip",
+                 "text": s["cta_chip"]["text"]})
         if s.get("text_overlay") and kind != "product":
             add({"kind": "text", "role": "on-screen text", "shot_id": sid, "label": f"Shot {sid} on-screen text",
                  "text": s["text_overlay"]})
@@ -1064,13 +1073,13 @@ def run_stage(project: dict, proj_path: Path, stage: str, eng: Engines | None = 
             st["cleared"][r["key"]] = {"label": r.get("label", ""), "at": _now()}
     # Stock / AI assets that FAIL are rejected automatically so the fetcher replaces them
     auto = auto_reject_failed_assets(project, fails) if stage == "assets" else []
-    report = out / f"{stage}_report.html"
+    report = out / f"{stage}_report{_sfx(project)}.html"
     write_report(project, stage, results, report, extra)
     summary = {"stage": stage, "status": overall, "policy": POLICY_VERSION, "checked_at": _now(),
                "fails": len(fails), "reviews": len(reviews), "items": len(results), "report": str(report),
                "results": [{k: r.get(k) for k in ("key", "kind", "role", "label", "status", "reasons", "decision", "shot_id")}
                            for r in results], **extra}
-    (out / f"{stage}_report.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+    (out / f"{stage}_report{_sfx(project)}.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     project["safety_state"][stage] = {k: summary[k] for k in ("status", "policy", "checked_at", "fails", "reviews",
                                                               "items", "report")} | ({"video_sha": extra["video_sha"]}
                                                                                      if extra else {})
@@ -1110,7 +1119,7 @@ def apply_review(project: dict, proj_path: Path, review: dict) -> int:
     known = {}
     out, _, _ = _paths(project, proj_path)
     for stage in ("assets", "final"):
-        f = out / f"{stage}_report.json"
+        f = out / f"{stage}_report{_sfx(project)}.json"
         if f.exists():
             for r in json.loads(f.read_text(encoding="utf-8")).get("results", []):
                 known[r["key"]] = r
@@ -1139,7 +1148,7 @@ def apply_review(project: dict, proj_path: Path, review: dict) -> int:
     so = review.get("signoff")
     if so:
         final = Path(project.get("final_output", ""))
-        final_json = out / "final_report.json"
+        final_json = out / f"final_report{_sfx(project)}.json"
         final_results = json.loads(final_json.read_text(encoding="utf-8")).get("results", []) if final_json.exists() else []
         final_open = resolve(project, final_results)[0] if final_results else FAIL
         if not final.exists() or so.get("video_sha") != file_hash(final):
@@ -1163,7 +1172,7 @@ def refresh_stage_status(project: dict, proj_path: Path) -> None:
     """Recompute each stage's overall status after human decisions / overrides."""
     out, _, _ = _paths(project, proj_path)
     for stage in ("assets", "final"):
-        f = out / f"{stage}_report.json"
+        f = out / f"{stage}_report{_sfx(project)}.json"
         if f.exists() and stage in project.get("safety_state", {}):
             results = json.loads(f.read_text(encoding="utf-8")).get("results", [])
             overall, fails, reviews = resolve(project, results)

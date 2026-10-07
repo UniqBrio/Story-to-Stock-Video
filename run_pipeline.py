@@ -91,6 +91,42 @@ def run_preflight(proj_json: Path, extra: list[str]) -> int:
     return run_script("preflight", [str(proj_json)] + extra)
 
 
+def render_variant_b(proj_json: Path, project: dict) -> None:
+    """A/B test: version B differs only in the CTA style (text ↔ button). Re-runs phases 5–7 plus the
+    final safety gate and QA from project_B.json, reusing the assembled footage, voiceover and music."""
+    tcfg = dict(project.get("text", {}))
+    a_style = (tcfg.get("cta_style") or "text").lower()
+    tcfg["cta_style"] = "text" if a_style == "button" else "button"
+    out_name = Path(project.get("output_file", "final_video.mp4"))
+    b = dict(project, variant="B", text=tcfg, output_file=f"{out_name.stem}_B{out_name.suffix or '.mp4'}")
+    for k in ("overlaid_file", "overlay_manifest", "overlay_audit", "audio_mixed_file", "audio_report", "final_output",
+              "cover_frame", "render_manifest", "qa_report", "qa_verdict"):
+        b.pop(k, None)
+    st = dict(b.get("safety_state", {}))
+    st.pop("final", None); st.pop("signoff", None)                 # B needs its own final check and sign-off
+    b["safety_state"] = st
+    pb = proj_json.with_name("project_B.json")
+    pb.write_text(json.dumps(b, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"\n{'█'*62}\n  A/B VARIANT B — CTA style '{tcfg['cta_style']}' (A uses '{a_style}')\n{'█'*62}")
+    for phase in (5, 6, 7):
+        banner(phase, PHASES[phase][1] + "  [B]")
+        if run_script(PHASES[phase][0], [str(pb), "--force"]) != 0:
+            print(f"\n  ❌  Variant B stopped at phase {phase} — version A is unaffected")
+            return
+    print(f"\n{'═'*62}\n  CONTENT SAFETY — U-rated check of version B\n{'═'*62}")
+    run_script("content_safety", [str(pb), "--stage", "final"])
+    banner(8, PHASES[8][1] + "  [B]")
+    run_script("qa_check", [str(pb)])
+    rb = json.loads(pb.read_text(encoding="utf-8-sig"))
+    print("\n" + "█"*62)
+    print(f"  A/B  A: {project.get('final_output')}  (CTA {a_style})")
+    print(f"       B: {rb.get('final_output', '—')}  (CTA {tcfg['cta_style']})  → QA: {rb.get('qa_verdict', '?')}")
+    print("  Post them a few days apart; compare DMs + comments per 1,000 views.")
+    print("  Version B needs its own sign-off: Output/safety/final_report_B.html, then")
+    print(f"     python content_safety.py {pb.name} --apply-review <safety_review.json>")
+    print("█"*62 + "\n")
+
+
 def run_vo_aligner(proj_json: Path, accept: bool) -> int:
     print(f"\n{'═'*62}\n  VOICEOVER — fit the spoken phrases to the shots\n{'═'*62}")
     rc = run_script("vo_aligner", [str(proj_json)] + (["--accept"] if accept else []))
@@ -206,6 +242,21 @@ def main():
     need_preflight = not args.only_phase and args.from_phase <= 2
     safety_final_rc = None
     for phase in phases:
+        # preflight + timing first: the timing step can lengthen shots, which changes the clip windows
+        # the safety gate clears — so the gate must always see the final shot lengths
+        if need_preflight and phase > 1:
+            need_preflight = False
+            rc = run_preflight(proj_json, ["--no-fetch"] if args.skip_fetch else [])
+            run_log.append({"phase": "preflight", "script": "preflight", "rc": rc, "seconds": 0})
+            if rc != 0:
+                print("\n  ❌  Preflight found critical issues — nothing was fetched or rendered")
+                failed = "preflight"
+                break
+            rc = run_vo_aligner(proj_json, args.accept_vo)
+            run_log.append({"phase": "vo-align", "script": "vo_aligner", "rc": rc, "seconds": 0})
+            if rc != 0:
+                failed = "vo"
+                break
         if phase == 3:
             print(f"\n{'═'*62}\n  CONTENT SAFETY — U-rated check of every asset, text and audio layer\n{'═'*62}")
             src = run_script("content_safety", [str(proj_json), "--stage", "assets"])
@@ -219,19 +270,6 @@ def main():
                           "     Approve / Reject, Save safety_review.json, then rerun with\n"
                           f"     --apply-safety-review <safety_review.json> --from 3",
                        4: "\n  ❌  Content-safety models are missing: python content_safety.py --setup"}.get(src, ""))
-                break
-        if need_preflight and phase > 1:
-            need_preflight = False
-            rc = run_preflight(proj_json, ["--no-fetch"] if args.skip_fetch else [])
-            run_log.append({"phase": "preflight", "script": "preflight", "rc": rc, "seconds": 0})
-            if rc != 0:
-                print("\n  ❌  Preflight found critical issues — nothing was fetched or rendered")
-                failed = "preflight"
-                break
-            rc = run_vo_aligner(proj_json, args.accept_vo)
-            run_log.append({"phase": "vo-align", "script": "vo_aligner", "rc": rc, "seconds": 0})
-            if rc != 0:
-                failed = "vo"
                 break
         script, label = PHASES[phase]
         banner(phase, label)
@@ -322,6 +360,8 @@ def main():
     print("\n  🚦  G6: review on a phone with sound OFF first, then SHIP / FIX / KILL.")
     print("  🛡   Publish only after the U-rated sign-off in Output/safety/final_report.html is recorded.")
     print("█"*62 + "\n")
+    if project.get("text", {}).get("ab_variant") and not args.only_phase and project.get("final_output"):
+        render_variant_b(proj_json, project)
     sys.exit(qa_rc or (1 if safety_final_rc not in (None, 0) else 0))
 
 

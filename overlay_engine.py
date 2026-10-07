@@ -16,6 +16,8 @@ tamil-text-overlay-typography · README §2):
   • Safe zones: Instagram header / caption+actions / right rail are never used
   • Tamil    : detected per line → Noto Sans Tamil → Nirmala UI; drawn by libass (`ass` filter),
                because drawtext never reorders pre-base vowel signs (கை would read க + ை)
+  • CTA      : text colour checked against the card (WCAG 3:1) and switched if it would not read;
+               cta_style = button → a rounded #B85F00 pill with white text and a soft pop-in (libass)
   • Logo     : end_only (default — the T5 card carries the logo) · bug · both · none;
                the bug uses the logo variant (same folder) that stays visible on the footage behind it;
                a bug never appears on cards, and per-shot Logo Bug yes/no overrides
@@ -37,7 +39,8 @@ from svos_common import (load_project, save_project, check_ffmpeg, run_ff, probe
                          ff_escape_text, fit_text, measure_text, is_tamil, is_light, hex_to_ff,
                          hex_clean, safe_zones, words, banner, set_log, output_dir, BRAND,
                          font_family, ass_color, ass_escape, ass_document, ass_time, ass_filter,
-                         ass_size_scale, stage_ass_fonts, best_logo)
+                         ass_size_scale, stage_ass_fonts, best_logo, contrast_ratio, readable_color,
+                         CTA_BUTTON, TEXT_MIN_CONTRAST, variant_suffix)
 
 STYLE = {
     #            size×   lines  upper  default pos      anim-in  anim-out
@@ -97,9 +100,12 @@ def build_overlays(project: dict, timeline: list[dict],
     font_tamil = find_font("", tamil=True, fonts_folder=tcfg.get("fonts_folder") or None,
                            tamil_preferred=tcfg.get("font_tamil", ""))
     tl_by_id = {t["shot_id"]: t for t in timeline}
+    cta_style = (tcfg.get("cta_style") or "text").lower()
+    cta_pill = hex_clean(tcfg.get("cta_color"), CTA_BUTTON)
+    logo_bg = hex_clean(project.get("logo", {}).get("card_bg"), BRAND["purple"])
 
     filters, manifest, audit = [], [], []
-    ass_events = []
+    ass_events, ass_fonts = [], set()
     for shot in project["shots"]:
         text = (shot.get("text_overlay") or "").strip()
         if not text:
@@ -164,6 +170,12 @@ def build_overlays(project: dict, timeline: list[dict],
             color = hex_clean(shot.get("text_color"), card_text if is_light(bg) else BRAND["white"])
         elif style == "cta":
             color = hex_clean(shot.get("text_color"), BRAND["white"])
+            card_bg = hex_clean(shot.get("card_bg") or logo_bg, BRAND["purple"]) if kind == "logo_card" else ""
+            if card_bg and cta_style != "button" and contrast_ratio(color, card_bg) < TEXT_MIN_CONTRAST:
+                fixed = readable_color(card_bg, color)
+                audit.append(f"{sid}: CTA colour {color} does not read on {card_bg} "
+                             f"({contrast_ratio(color, card_bg):.1f}:1) — using {fixed}")
+                color = fixed
         else:
             color = hex_clean(shot.get("text_color"), BRAND["white"])
         if color.upper() == brand_color.upper() and style == "keyword":
@@ -179,9 +191,18 @@ def build_overlays(project: dict, timeline: list[dict],
             alpha_expr = (f"if(lt(t\\,{abs_start:.3f})\\,0\\,if(gt(t\\,{abs_end:.3f})\\,0\\,"
                           f"min(min(1\\,(t-{abs_start:.3f})/{a_in:.2f})\\,min(1\\,({abs_end:.3f}-t)/{a_out:.2f}))))")
 
-        if tamil and font:
+        button = style == "cta" and cta_style == "button" and bool(font)
+        if button:
+            bg = hex_clean(shot.get("card_bg") or logo_bg, BRAND["purple"]) if kind == "logo_card" else ""
+            color = readable_color(cta_pill, BRAND["white"])
+            ass_events += _ass_button(lines, font, size, color, cta_pill, bg, a_in, a_out, abs_start, abs_end,
+                                      top_y, line_h, line_gap, tw)
+            ass_fonts.add(font)
+            lines_drawn = True
+        elif tamil and font:
             ass_events += _ass_lines(lines, font, size, color, style, anim, a_in, a_out, abs_start, abs_end,
                                      x_expr, top_y, line_h, line_gap, tw, use_shadow, box_mode)
+            ass_fonts.add(font)
             lines_drawn = True
         else:
             lines_drawn = False
@@ -211,15 +232,75 @@ def build_overlays(project: dict, timeline: list[dict],
         manifest.append({"shot_id": sid, "treatment": shot_treatment(shot), "style": style, "anim": anim,
                          "lines": lines, "font": Path(font).name if font else "ffmpeg-default",
                          "size": size, "color": color, "position": position,
-                         "start": abs_start, "end": abs_end, "tamil": tamil,
+                         "start": abs_start, "end": abs_end, "tamil": tamil, "button": button,
                          "renderer": "libass" if lines_drawn else "drawtext"})
+    # early CTA chip: small pill in the lower third of the shot before the end card (slot set by vo_aligner)
+    for shot in project["shots"]:
+        chip, t = shot.get("cta_chip"), tl_by_id.get(shot["shot_id"])
+        if not chip or not t or not font_latin:
+            continue
+        csize = max(MIN_LEGIBLE_PX_AT_1080 * tw // 1080, int(base_size * 0.75))
+        lh = measure_text(font_latin, csize, chip["text"])[1]
+        _, top = block_position("lower_third", "keyword", lh, tw, th, sz)
+        a0 = round(t["start"] + float(chip["start"]), 3)
+        a1 = round(min(t["start"] + float(chip["end"]), t["end"] - (0.5 if t["trans_dur"] else 0.3)), 3)
+        ass_events += _ass_button([chip["text"]], font_latin, csize, readable_color(cta_pill, BRAND["white"]),
+                                  cta_pill, "", 0.25, 0.25, a0, a1, top, lh, 0, tw)
+        ass_fonts.add(font_latin)
+        manifest.append({"shot_id": shot["shot_id"], "treatment": shot_treatment(shot), "style": "chip", "anim": "pop",
+                         "lines": [chip["text"]], "font": Path(font_latin).name, "size": csize, "color": BRAND["white"],
+                         "position": "lower_third", "start": a0, "end": a1, "tamil": False, "button": True,
+                         "chip": True, "renderer": "libass"})
     if ass_events:
         ass_dir = Path(ass_dir or ".")
-        ass_path = ass_dir / "tamil_overlays.ass"
+        ass_path = ass_dir / f"libass_overlays{variant_suffix(project)}.ass"
         ass_path.parent.mkdir(parents=True, exist_ok=True)
         ass_path.write_text(ass_document(tw, th, ass_events), encoding="utf-8")
-        filters.append(ass_filter(ass_path, stage_ass_fonts(font_tamil, ass_dir / "ass_fonts")))
+        fonts_dir = ass_dir / "ass_fonts"
+        for f in sorted(ass_fonts):
+            stage_ass_fonts(f, fonts_dir)
+        filters.append(ass_filter(ass_path, fonts_dir))
     return filters, manifest, audit
+
+
+def _pill_path(w: float, h: float) -> str:
+    """ASS vector drawing of a rounded rectangle (fully rounded ends), origin top-left."""
+    r = h / 2.0
+    k = 0.5523 * r                                           # cubic-Bézier quarter-circle constant
+    pts = [f"m {r:.0f} 0", f"l {w - r:.0f} 0", f"b {w - r + k:.0f} 0 {w:.0f} {r - k:.0f} {w:.0f} {r:.0f}",
+           f"b {w:.0f} {r + k:.0f} {w - r + k:.0f} {h:.0f} {w - r:.0f} {h:.0f}", f"l {r:.0f} {h:.0f}",
+           f"b {r - k:.0f} {h:.0f} 0 {r + k:.0f} 0 {r:.0f}", f"b 0 {r - k:.0f} {r - k:.0f} 0 {r:.0f} 0"]
+    return " ".join(pts)
+
+
+def _ass_button(lines, font, size, text_hex, pill_hex, bg_hex, a_in, a_out, start, end,
+                top_y, line_h, line_gap, tw) -> list[str]:
+    """CTA as a button: a rounded pill behind the text, both popping in (80 → 106 → 100 %) and fading out.
+    The pill gets a thin outline when it would not stand out from the card behind it."""
+    fs = size * ass_size_scale(font)
+    widths = [measure_text(font, size, ln)[0] for ln in lines]
+    block_h = len(lines) * line_h + (len(lines) - 1) * line_gap
+    pad_x, pad_y = int(size * 0.65), int(size * 0.38)
+    w, h = max(widths) + 2 * pad_x, block_h + 2 * pad_y
+    cx, cy = tw // 2, int(top_y + block_h / 2)
+    pop = "\\fscx80\\fscy80\\t(0,220,\\fscx106\\fscy106)\\t(220,380,\\fscx100\\fscy100)"
+    fade = f"\\fad({int(min(a_in, 0.25) * 1000)},{int(a_out * 1000)})"
+    pc, _ = ass_color(pill_hex)
+    sc, sa = ass_color("#000000", 0.45)
+    outline = ""
+    if bg_hex and contrast_ratio(pill_hex, bg_hex) < 3.0:
+        oc, _ = ass_color(readable_color(bg_hex, BRAND["white"]))
+        outline = f"\\bord4\\3c{oc}"
+    out = [f"Dialogue: 0,{ass_time(start)},{ass_time(end)},Base,,0,0,0,,"
+           f"{{\\an5\\pos({cx},{cy})\\p1\\1c{pc}{outline or chr(92) + 'bord0'}\\xshad0\\yshad6\\4c{sc}\\4a{sa}"
+           f"{pop}{fade}}}{_pill_path(w, h)}"]
+    tc, _ = ass_color(text_hex)
+    for i, ln in enumerate(lines):
+        y = int(top_y + i * (line_h + line_gap) + line_h / 2)
+        out.append(f"Dialogue: 1,{ass_time(start)},{ass_time(end)},Base,,0,0,0,,"
+                   f"{{\\an5\\pos({cx},{y})\\fn{font_family(font)}\\fs{fs:.1f}\\b1\\1c{tc}\\bord0\\shad0"
+                   f"{pop}{fade}}}{ass_escape(ln)}")
+    return out
 
 
 def _ass_lines(lines, font, size, color, style, anim, a_in, a_out, start, end,
@@ -350,7 +431,7 @@ def main():
     assembled = project.get("assembled_file", "")
     if not assembled or not Path(assembled).exists():
         sys.exit("❌  assembled_file not found in project.json — run transition_engine.py first")
-    out_file = Path(assembled).parent / "assembled_with_overlays.mp4"
+    out_file = Path(assembled).parent / f"assembled_with_overlays{variant_suffix(project)}.mp4"
     tw, th = project.get("width", 1080), project.get("height", 1920)
 
     # U-rated gate: every on-screen text and the logo must have passed the content-safety check
@@ -358,6 +439,8 @@ def main():
     blocked = [f"{s['shot_id']}: {safety.require_text(project, s['text_overlay'])}" for s in project["shots"]
                if (s.get("text_overlay") or "").strip() and shot_kind(s) != "product"
                and safety.require_text(project, s["text_overlay"])]
+    blocked += [f"{s['shot_id']} CTA chip: {safety.require_text(project, s['cta_chip']['text'])}"
+                for s in project["shots"] if s.get("cta_chip") and safety.require_text(project, s["cta_chip"]["text"])]
     timeline = project.get("timeline") or compute_timeline(project["shots"])
     logo_cfg = project.get("logo", {})
     logo_path = logo_cfg.get("path", "")

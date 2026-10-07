@@ -142,6 +142,10 @@ Known limits:
 - **Celebrities.** No local model can recognise them. Cartoon-only shots instead reject every real face.
 - **Calibration.** The thresholds were set on a small labelled set, documented in the audit. The human sign-off stays mandatory for this reason.
 
+## Call to action
+
+Project Settings: `cta_style` = `text` (default) or `button`, a rounded `#B85F00` pill with white text and a pop-in. `cta_early` = `true` adds a small CTA chip on the shot before the end card. `ab_variant` = `true` also renders version B with the other CTA style (`<name>_B.mp4`). CTA text colour is checked against the end card (WCAG 3:1), and QA notes a CTA without a benefit or one the voiceover never speaks.
+
 ## Self-test
 
 ```bash

@@ -78,7 +78,43 @@ NEW_SETTINGS = [
     ("card_budget",       "3",              "Max blank text frames (T1) — README §2"),
     ("cover_time",        "",               "Seconds for the cover frame — blank = first T1 card"),
     ("max_duration",      "90",             "Warn if the assembled video is longer than this"),
+    # stock search
+    ("max_queries_per_shot",  "3",   "Keyword phrases searched per shot: 1–5 (default 3)"),
+    ("fetch_budget_pexels",   "150", "Pexels requests per run (default 150 — Pexels allows 200/hour)"),
+    ("fetch_budget_pixabay",  "300", "Pixabay requests per run (default 300)"),
+    ("fetch_budget_unsplash", "40",  "Unsplash requests per run (default 40 — demo keys allow 50/hour)"),
+    ("fetch_cache_hours",     "24",  "Hours to reuse saved search results (default 24 · 0 = always search again)"),
+    ("max_download_mb",       "300", "Largest single download in MB (default 300)"),
+    # content safety
+    ("vo_language",           "auto", "Language the voice check listens for: auto (default) · en · ta"),
+    ("captions_path",         "",     "SRT / VTT / TXT captions file to check · blank = no captions"),
+    ("illustration_only_subjects", "", "Comma list of subjects shown only as cartoons · blank = built-in swimwear list"),
+    ("safety_models_dir",     "",     "Folder with the safety models · blank = .models next to the scripts"),
+    ("safety_frames_per_second", "1", "Video frames checked per second: 0.5–4 (default 1 · higher = slower, more thorough)"),
+    # voiceover and call to action
+    ("match_text_to_vo", "true",
+     "true (default) · false. When true, a stock shot's on-screen text is replaced ONLY if it shares no meaningful "
+     "word with what is said over that shot, and the transcript is reliable or a VO Line is typed. Text cards, the "
+     "logo/CTA end card and numbers/times/days are never changed. Each change is listed in vo_timing.md"),
+    ("cta_style",   "text",    "text (default) — plain CTA text · button — rounded pill in cta_color with a pop-in"),
+    ("cta_color",   "#B85F00", "Button colour as #RRGGBB (default #B85F00, deeper Brio orange). The text colour on it "
+                               "is chosen automatically to stay readable"),
+    ("cta_early",   "true",    "true (default) — small CTA chip near the end of the shot before the end card · false — no chip"),
+    ("ab_variant",  "false",   "false (default) · true — also render version B with the other CTA style "
+                               "(<name>_B.mp4) for A/B testing. Version B needs its own safety sign-off"),
 ]
+NOTES = {k: n for k, _, n in NEW_SETTINGS}
+# original template notes that did not list every allowed value → replaced only while still unedited
+IMPROVED_NOTES = {
+    "preset":    ("FFmpeg preset: ultrafast/fast/medium/slow",
+                  "FFmpeg speed vs file size: ultrafast · superfast · veryfast · faster · fast · medium · slow (default) · "
+                  "slower · veryslow"),
+    "text_font": ("Font name for text overlays",
+                  "Inter (bundled, default) · any installed font name (e.g. Arial, Segoe UI, Poppins) · or the full path "
+                  "to a .ttf / .otf file"),
+    "crf":       ("H.264 quality: 16=best, 28=smallest",
+                  "H.264 quality 0–51: 16 = best · 18 = default · 23 = smaller · 28 = smallest"),
+}
 
 
 def norm(s) -> str:
@@ -156,13 +192,25 @@ def main():
     ps = wb["Project Settings"]
     existing = {norm(ps.cell(row=r, column=1).value) for r in range(1, ps.max_row + 1)}
     tmpl_row = next((r for r in range(3, ps.max_row + 1) if ps.cell(row=r, column=1).value), 3)
+    # fill empty Notes (column C) for known settings — never overwrite a note the user wrote
+    for r in range(3, ps.max_row + 1):
+        key = norm(ps.cell(row=r, column=1).value)
+        note = str(ps.cell(row=r, column=3).value or "").strip()
+        if key in IMPROVED_NOTES and note == IMPROVED_NOTES[key][0]:
+            ps.cell(row=r, column=3, value=IMPROVED_NOTES[key][1])
+            changes.append(f"Project Settings: note completed for {key}")
+        if key in NOTES and not note:
+            cell = ps.cell(row=r, column=3, value=NOTES[key])
+            src = ps.cell(row=tmpl_row, column=3)
+            cell.font, cell.alignment, cell.border, cell.fill = copy(src.font), copy(src.alignment), copy(src.border), copy(src.fill)
+            changes.append(f"Project Settings: note added for {key}")
     row = ps.max_row + 1
     added_any = False
     for key, default, note in NEW_SETTINGS:
         if key in existing:
             continue
         if not added_any:
-            ps.cell(row=row, column=1, value="— v2 design & audio settings —")
+            ps.cell(row=row, column=1, value="— settings added by upgrade_story_plan —")
             row += 1
             added_any = True
         for ci, val in enumerate((key, default, note), start=1):

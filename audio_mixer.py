@@ -31,7 +31,7 @@ import tempfile
 from pathlib import Path
 
 from svos_common import (load_project, save_project, check_ffmpeg, run_ff, run_ff_capture,
-                         probe_video_info, probe_duration, banner, set_log, output_dir)
+                         probe_video_info, probe_duration, banner, set_log, output_dir, variant_suffix)
 
 
 # ── Duck map from the VO ──────────────────────────────────────────────────────
@@ -242,7 +242,7 @@ def main():
     overlaid = project.get("overlaid_file", "")
     if not overlaid or not Path(overlaid).exists():
         sys.exit("❌  overlaid_file not found in project.json — run overlay_engine.py first")
-    out_file = Path(overlaid).parent / "assembled_with_audio.mp4"
+    out_file = Path(overlaid).parent / f"assembled_with_audio{variant_suffix(project)}.mp4"
 
     banner("Audio Mixer", f"target {project.get('audio', {}).get('target_lufs', -14)} LUFS · "
            f"TP {project.get('audio', {}).get('true_peak', -1.5)} dBTP · duck {project.get('audio', {}).get('duck_db', 8)} dB")

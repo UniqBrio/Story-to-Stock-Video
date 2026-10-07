@@ -180,17 +180,18 @@ def _render_ass_gray(font_path: str, text: str, fs: float, W: int, H: int, ffmpe
 def ass_size_scale(font_path: str, ffmpeg: str = "ffmpeg") -> float:
     """ASS font size per drawtext/PIL pixel size. libass sizes a font by its ascender+descender,
     PIL and drawtext by the em, so the same number draws smaller in libass. Measured once per
-    font by comparing the ink height of 'க' at size 100."""
+    font by comparing the ink height of 'க' (Tamil fonts) or 'H' (Latin fonts) at size 100."""
     key = (ffmpeg, font_path)
     if key in _ASS_SCALE:
         return _ASS_SCALE[key]
     scale = 1.0
     try:
         from PIL import ImageFont
-        box = ImageFont.truetype(font_path, 100).getbbox("\u0B95")
+        probe = "\u0B95" if is_tamil_font(font_path) else "H"
+        box = ImageFont.truetype(font_path, 100).getbbox(probe)
         pil_h = box[3] - box[1]
         W, H = 300, 260
-        g = _render_ass_gray(font_path, "\u0B95", 100, W, H, ffmpeg)
+        g = _render_ass_gray(font_path, probe, 100, W, H, ffmpeg)
         rows = [y for y in range(H) if any(g[y * W + x] > 128 for x in range(W))] if g else []
         if rows and pil_h > 0:
             scale = pil_h / (rows[-1] - rows[0] + 1)
@@ -382,6 +383,71 @@ def logo_visibility(path: str, backgrounds: list) -> dict:
         hidden += float((ratio < LOGO_MIN_CONTRAST).mean()) / len(backgrounds)
         p10 = min(p10, float(np.percentile(ratio, 10)))
     return {"hidden": hidden, "p10": p10, "transparent": transparent}
+
+def contrast_ratio(a, b) -> float:
+    """WCAG contrast ratio between two colours ('#RRGGBB' or (r, g, b))."""
+    la = _rel_lum(hex_rgb(a) if isinstance(a, str) else a)
+    lb = _rel_lum(hex_rgb(b) if isinstance(b, str) else b)
+    return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+
+TEXT_MIN_CONTRAST = 3.0      # WCAG large text (overlays are ≥ 46 px bold)
+CTA_BUTTON = "#B85F00"       # deeper Brio orange: white text on it passes (4.5:1); brand orange would not (3.0:1)
+
+def readable_color(bg: str, preferred: str, candidates=None, min_ratio: float = TEXT_MIN_CONTRAST) -> str:
+    """The preferred text colour if it reads on bg, else the brand colour that reads best."""
+    if contrast_ratio(preferred, bg) >= min_ratio:
+        return hex_clean(preferred)
+    pool = candidates or [BRAND["white"], BRAND["near_black"], BRAND["orange"], BRAND["purple"]]
+    return hex_clean(max(pool, key=lambda c: contrast_ratio(c, bg)))
+
+CTA_ACTIONS = re.compile(r"\b(dm|message|comment|link|click|tap|follow|visit|call|whatsapp|bio|download|"
+                         r"sign\s*up|book|demo|join|register|apply|subscribe)\b", re.I)
+CTA_BENEFIT = re.compile(r"\b(free|demo|see|live|get|trial|guide|offer|discount|save|price|pricing|learn|start|"
+                         r"try|tour|walkthrough|access|template|checklist|consult|call)\b", re.I)
+_CTA_STOP = {"a", "an", "the", "to", "for", "and", "or", "me", "us", "now", "it", "your", "our", "on", "in", "at"}
+
+def cta_parts(text: str) -> dict:
+    """Split a call to action: {'action': 'DM', 'keyword': 'BRIO', 'rest': ['see', 'live'], 'benefit': True}."""
+    toks = (text or "").split()
+    action, keyword, ai = "", "", -1
+    for i, t in enumerate(toks):
+        if CTA_ACTIONS.fullmatch(re.sub(r"[^\w ]", "", t)):
+            action, ai = re.sub(r"[^\w]", "", t), i
+            break
+    for t in toks[ai + 1:] if ai >= 0 else toks:
+        core = re.sub(r"[^\w]", "", t)
+        if core and (re.match(r"^['\"‘’“”]", t) or (core.isupper() and len(core) >= 2)):
+            keyword = core
+            break
+    rest = [w for w in (re.sub(r"[^\w]", "", t).lower() for t in toks)
+            if w and w not in _CTA_STOP and w != action.lower() and w != keyword.lower()]
+    benefit = bool(CTA_BENEFIT.search(" ".join(rest))) or len(rest) >= 2
+    return {"action": action, "keyword": keyword, "rest": rest, "benefit": benefit}
+
+def variant_suffix(project: dict) -> str:
+    """'' for the main render, '_B' for the A/B variant — every file the variant writes carries it."""
+    v = str(project.get("variant") or "").strip()
+    return f"_{v}" if v else ""
+
+def early_cta(project: dict) -> dict | None:
+    """{'shot_id', 'text'} for the small CTA chip on the shot right before the end card, or None.
+    Viewers who leave before the end card still see the ask. Setting cta_early (default on)."""
+    if not project.get("text", {}).get("cta_early", True):
+        return None
+    shots = project.get("shots", [])
+    for k in range(len(shots) - 1, 0, -1):
+        card = shots[k]
+        if shot_kind(card) == "logo_card" and (card.get("text_overlay") or "").strip():
+            prev = shots[k - 1]
+            parts = cta_parts(card["text_overlay"])
+            if shot_kind(prev) != "stock" or not parts["action"]:
+                return None
+            if parts["keyword"]:
+                text = f"{parts['action']} '{parts['keyword']}' →"
+            else:
+                text = " ".join(card["text_overlay"].split()[:3]).rstrip(".,!") + " →"
+            return {"shot_id": prev["shot_id"], "text": text}
+    return None
 
 def logo_variants(path: str) -> list[str]:
     """The given logo plus every transparent PNG/WebP variant in the same folder."""

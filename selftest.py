@@ -123,6 +123,7 @@ def make_xlsx(d: Path, A: dict) -> Path:
         ("crf", "20"), ("preset", "veryfast"), ("text_font", "Inter"), ("text_size_default", "72"), ("text_shadow", "true"),
         ("unified_grade", "warm_soft"), ("target_lufs", "-14"), ("duck_db", "9"), ("platform", "reels"),
         ("pexels_api_key", ""), ("pixabay_api_key", ""), ("unsplash_api_key", ""),
+        ("cta_early", "false"),   # keep the exact timeline maths below stable; the chip has its own unit tests
     ]:
         ps.append([k, v, ""])
     dl = wb.create_sheet("Download Log")

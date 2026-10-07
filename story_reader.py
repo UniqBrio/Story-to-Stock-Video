@@ -524,6 +524,10 @@ def build_project(xlsx_path: Path, prev_json: Path | None = None) -> tuple[dict,
             "overlay_budget": to_int(settings.get("overlay_budget"), 5),
             "card_budget":    to_int(settings.get("card_budget"), 3),
             "match_vo":       to_bool(settings.get("match_text_to_vo"), True),   # vo_aligner may fix mismatched text
+            "cta_style":      str(settings.get("cta_style", "text") or "text").lower(),   # text | button
+            "cta_color":      hex_clean(settings.get("cta_color"), "#B85F00"),           # button colour
+            "cta_early":      to_bool(settings.get("cta_early"), True),                 # chip on the last shot
+            "ab_variant":     to_bool(settings.get("ab_variant"), False),               # also render version B
         },
         "fetch": {
             "max_queries_per_shot": max(1, to_int(settings.get("max_queries_per_shot"), 3)),

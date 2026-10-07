@@ -37,3 +37,6 @@ contact_sheet.html
 picks.json
 review.json
 validation_report.html
+
+# --- Office lock files (created while a document is open) ---
+~$*

@@ -25,7 +25,7 @@ from pathlib import Path
 from datetime import datetime
 
 from svos_common import (load_project, save_project, check_ffmpeg, run_ff, run_ff_capture,
-                         probe_video_info, banner, set_log, output_dir)
+                         probe_video_info, banner, set_log, output_dir, variant_suffix)
 
 
 def measure_final_loudness(path: Path) -> dict:
@@ -134,11 +134,12 @@ def main():
                       "page_url": s.get("page_url", ""), "author": s.get("author", "")}
                      for s in project["shots"] if s.get("source")],
     }
-    (out_folder / "render_manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    mf_name = f"render_manifest{variant_suffix(project)}.json"
+    (out_folder / mf_name).write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
     shutil.copy2(proj_path, out_folder / "project.snapshot.json")
 
     project["final_output"] = str(out_path)
-    project["render_manifest"] = str(out_folder / "render_manifest.json")
+    project["render_manifest"] = str(out_folder / mf_name)
     project["cover_frame"] = str(cover) if cover.exists() else ""
     save_project(project, proj_path)
 

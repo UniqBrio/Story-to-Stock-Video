@@ -33,7 +33,7 @@ from datetime import datetime
 from svos_common import (load_project, save_project, check_ffmpeg, run_ff, run_ff_capture,
                          probe_video_info, banner, set_log, output_dir, shot_kind, words,
                          font_is_family, is_tamil_font, ffmpeg_text_shaping, find_font,
-                         logo_visibility, LOGO_MAX_HIDDEN, hex_clean, BRAND)
+                         logo_visibility, LOGO_MAX_HIDDEN, hex_clean, BRAND, cta_parts, CTA_ACTIONS, variant_suffix)
 
 CTA_RE = re.compile(r"\b(dm|comment|link|click|tap|follow|visit|call|whatsapp|bio|download|sign\s*up|book|demo)\b", re.I)
 
@@ -254,13 +254,32 @@ def main():
     if off_brand:
         R.add("minor", "fonts", f"Brand font '{brand_font}' not used — overlays fell back to {', '.join(off_brand)}")
 
-    cta_hits = [m for m in manifest if CTA_RE.search(" ".join(m["lines"]))]
+    chips = [m for m in manifest if m.get("chip")]
+    cta_hits = [m for m in manifest if CTA_RE.search(" ".join(m["lines"])) and not m.get("chip")]
+    for c in chips:      # the early chip repeats the end card's ask — it must use the same keyword
+        if cta_hits and cta_parts(" ".join(c["lines"]))["keyword"] != cta_parts(" ".join(cta_hits[-1]["lines"]))["keyword"]:
+            R.add("minor", "cta", f"{c['shot_id']}: early CTA chip “{' '.join(c['lines'])}” does not match the end card")
     if len(cta_hits) == 0:
         R.add("critical", "cta", "No visible CTA text found (sound-off viewers never see the ask)")
     elif len(cta_hits) > 1:
         R.add("major", "cta", f"{len(cta_hits)} CTA-like overlays ({', '.join(m['shot_id'] for m in cta_hits)}) — single CTA rule")
     elif cta_hits[0]["end"] < info["duration"] - 8:
         R.add("minor", "cta", f"CTA ends at {cta_hits[0]['end']:.1f}s, well before the end — consider moving it to the close")
+    if cta_hits:
+        cta_text = " ".join(cta_hits[-1]["lines"])
+        parts = cta_parts(cta_text)
+        if not parts["benefit"]:
+            ex = f"{parts['action'] or 'DM'} '{parts['keyword'] or 'KEYWORD'}'"
+            R.add("minor", "cta", f"CTA “{cta_text}” says what to do but not what the viewer gets — e.g. "
+                                  f"“{ex} to see it live” or “{ex} for a free demo”")
+        plan = project.get("vo_plan") or {}
+        spoken_rows = [r for r in plan.get("map", []) if r.get("heard")]
+        if spoken_rows:                                   # only judged when the voiceover was transcribed
+            closing = " ".join(r["heard"] for r in spoken_rows[-2:])
+            if not CTA_ACTIONS.search(closing):
+                R.add("minor", "cta", f"The voiceover never says the call to action — sound-on viewers do not hear "
+                                      f"“{cta_text}”. Add it to the end of the recording, e.g. "
+                                      f"“{parts['action'] or 'DM'} {parts['keyword'] or ''} to see it live”.".replace("  ", " "))
 
     has_logo_card = any(t["kind"] == "logo_card" for t in timeline)
     for sh in project["shots"]:
@@ -286,7 +305,7 @@ def main():
             R.add("minor", "picture", f"{s['shot_id']}: still image without Ken Burns")
 
     # ── Thumb-stop frames for the human freeze test ───────────────────────────
-    qa_dir = out_dir / "qa"
+    qa_dir = out_dir / f"qa{variant_suffix(project)}"
     qa_dir.mkdir(parents=True, exist_ok=True)
     frames = []
     for t in (0.0, 1.0, 2.0, 3.0):
@@ -327,12 +346,13 @@ def main():
            "drug/alcohol-related or otherwise unsuitable for children; swimwear-type subjects are cartoon-only; "
            "sign-off recorded in `Output/safety/final_report.html`",
            "", f"Frames: {', '.join(Path(f).name for f in frames)}"]
-    (out_dir / "qa_report.md").write_text("\n".join(md), encoding="utf-8")
-    (out_dir / "qa_report.json").write_text(json.dumps({
+    sfx = variant_suffix(project)
+    (out_dir / f"qa_report{sfx}.md").write_text("\n".join(md), encoding="utf-8")
+    (out_dir / f"qa_report{sfx}.json").write_text(json.dumps({
         "verdict": verdict, "critical": crit, "major": major, "minor": minor,
         "findings": [{"severity": s, "area": a, "message": m} for s, a, m in R.items],
         "spec": info, "loudness": loud, "frames": frames}, indent=2, ensure_ascii=False), encoding="utf-8")
-    project["qa_report"] = str(out_dir / "qa_report.md")
+    project["qa_report"] = str(out_dir / f"qa_report{sfx}.md")
     project["qa_verdict"] = verdict
     save_project(project, proj_path)
 
@@ -342,7 +362,7 @@ def main():
                 icon = {"critical": "❌", "major": "⚠️", "minor": "ℹ️"}[sev]
                 print(f"  {icon}  [{area}] {msg}")
     print(f"\n  {'❌' if crit else '✅'}  {verdict}  — {crit} critical · {major} major · {minor} minor")
-    print(f"  📄  {out_dir / 'qa_report.md'}\n  🖼   thumb-stop frames → {qa_dir}\n")
+    print(f"  📄  {out_dir / f'qa_report{sfx}.md'}\n  🖼   thumb-stop frames → {qa_dir}\n")
     print("  🚦  G6 is a human gate: review on a phone, sound OFF first, then decide SHIP / FIX / KILL.\n")
     if crit:
         sys.exit(1)

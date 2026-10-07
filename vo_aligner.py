@@ -40,7 +40,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 from svos_common import (load_project, save_project, banner, output_dir, probe_duration, compute_timeline,
-                         timeline_total, shot_kind, set_log)
+                         timeline_total, shot_kind, set_log, early_cta)
 
 LEAD, FIRST_LEAD, TAIL = 0.15, 0.10, 0.25   # breathing room around each shot's words (s)
 MAX_GAP = 0.35                              # longest pause kept between phrases inside a shot
@@ -283,7 +283,7 @@ def match_text_to_voice(project: dict, shots: list, ranges: list, texts: list, t
     return out
 
 
-def fit_durations(shots: list, need_speech: dict) -> list:
+def fit_durations(shots: list, need_speech: dict, chip: dict | None = None) -> list:
     """Each shot lasts at least as long as its spoken words AND its on-screen text needs to be read.
     Never shorter than planned. Text windows are stretched to the reading minimum inside the shot."""
     changes = []
@@ -291,6 +291,7 @@ def fit_durations(shots: list, need_speech: dict) -> list:
     for s in shots:
         planned = float(s.setdefault("planned_duration", float(s.get("duration", 4.0))))
         speech = need = need_speech.get(s["shot_id"], 0.0)
+        chip_grew = False
         text = (s.get("text_overlay") or "").strip()
         if text and shot_kind(s) != "product":
             t0 = float(s.get("text_start", 0) or 0)
@@ -301,9 +302,19 @@ def fit_durations(shots: list, need_speech: dict) -> list:
             s["text_start"], s["text_end"] = round(t0, 2), round(t1, 2)
             margin = 0.0 if shot_kind(s) in ("card", "logo_card") else (0.5 if s.get("trans_dur") else 0.3)
             need = max(need, t1 + margin)
+        s.pop("cta_chip", None)
+        if chip and chip["shot_id"] == s["shot_id"]:
+            margin = 0.5 if s.get("trans_dur") else 0.3
+            c0 = (float(s["text_end"]) + 0.5) if text else 0.3
+            c1 = c0 + reading_need(chip["text"])
+            s["cta_chip"] = {"text": chip["text"], "start": round(c0, 2), "end": round(c1, 2)}
+            if c1 + margin > max(need, planned) + 1e-6:
+                need = c1 + margin
+                chip_grew = True
         new = max(planned, round(need + 0.049, 1)) if need else planned
         if new > planned + 1e-6:
-            changes.append((s["shot_id"], planned, new, "spoken words" if speech >= need - 1e-6 else "reading time"))
+            changes.append((s["shot_id"], planned, new, "spoken words" if speech >= need - 1e-6 else
+                            ("CTA chip" if chip_grew else "reading time")))
         s["duration"] = new
         if shot_kind(s) not in ("card", "logo_card"):
             s["trim_out"] = round(float(s.get("trim_in", 0) or 0) + new, 3)
@@ -329,7 +340,7 @@ def build_plan(project: dict, vo: str, accept: bool) -> tuple[dict, list[str]]:
         if j > i:
             need_speech[s["shot_id"]] = (speech_span(segs, i, j) + (FIRST_LEAD if k == 0 else LEAD) + TAIL
                                          + float(s.get("trans_dur", 0) or 0))
-    changes = fit_durations(shots, need_speech)
+    changes = fit_durations(shots, need_speech, early_cta(project))
     timeline = compute_timeline(shots)
     project["timeline"] = timeline
 
@@ -400,7 +411,7 @@ def write_report(project: dict, proj_path: Path, plan: dict) -> Path:
 
 def reading_only(project: dict, proj_path: Path, why: str) -> None:
     """Without an aligned voiceover, still make every shot long enough to read its on-screen text."""
-    changes = fit_durations(project["shots"], {})
+    changes = fit_durations(project["shots"], {}, early_cta(project))
     project["timeline"] = compute_timeline(project["shots"])
     save_project(project, proj_path)
     print(f"  ℹ️  {why} — checked reading time only")
