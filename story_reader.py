@@ -30,7 +30,7 @@ from pathlib import Path
 from content_safety import subject_needs_illustration, check_text, PASS as SAFE_PASS, FAIL as SAFE_FAIL
 from svos_common import (BRAND, normalise_shot_id, shot_kind, shot_treatment, words,
                          env_key, to_float, to_int, to_bool, hex_clean, compute_timeline,
-                         timeline_total, REAL_TRANSITIONS)
+                         timeline_total, REAL_TRANSITIONS, best_logo)
 
 try:
     import openpyxl
@@ -457,10 +457,12 @@ def build_project(xlsx_path: Path, prev_json: Path | None = None) -> tuple[dict,
     if not audio_paths["vo_path"]:
         warnings.append("Audio: no vo_path — the video will have no voiceover (audio_mode B: music + captions)")
 
+    # Only keys typed into the sheet are carried. Environment keys are read live by each stage
+    # (env_key) and must never be copied into project.json, where they would sit on disk in plain text.
     api_keys = {
-        "pexels":   env_key("PEXELS_API_KEY",   settings.get("pexels_api_key", "")),
-        "pixabay":  env_key("PIXABAY_API_KEY",  settings.get("pixabay_api_key", "")),
-        "unsplash": env_key("UNSPLASH_API_KEY", settings.get("unsplash_api_key", "")),
+        "pexels":   _str(settings.get("pexels_api_key", "")),
+        "pixabay":  _str(settings.get("pixabay_api_key", "")),
+        "unsplash": _str(settings.get("unsplash_api_key", "")),
     }
 
     project = {
@@ -540,6 +542,16 @@ def build_project(xlsx_path: Path, prev_json: Path | None = None) -> tuple[dict,
         "timeline": timeline,
         "validation": {"warnings": warnings, "errors": errors},
     }
+    # T5 logo card: use the logo variant that is fully visible on this card's colour (a purple 'U'
+    # vanishes on a purple card). Chosen here so the safety gate clears the exact file that is rendered.
+    for s in shots:
+        if shot_kind(s) == "logo_card":
+            base = s.get("local_file") or logo_path
+            bg = hex_clean(s.get("card_bg") or project["logo"]["card_bg"], BRAND["purple"])
+            pick, note = best_logo(base, [bg]) if base and Path(base).exists() else (base, "")
+            s["logo_file"] = pick
+            if note:
+                carry_notes.append(f"info: Shot {s['shot_id']} logo card on {bg} — {note}")
     if prev_json and prev_json.exists():
         try:   # safety decisions are keyed by content hash, so they stay valid when the sheet is re-read
             project["safety_state"] = json.loads(prev_json.read_text(encoding="utf-8-sig")).get("safety_state", {})

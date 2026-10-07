@@ -32,7 +32,8 @@ from datetime import datetime
 
 from svos_common import (load_project, save_project, check_ffmpeg, run_ff, run_ff_capture,
                          probe_video_info, banner, set_log, output_dir, shot_kind, words,
-                         font_is_family, is_tamil_font, ffmpeg_text_shaping, find_font)
+                         font_is_family, is_tamil_font, ffmpeg_text_shaping, find_font,
+                         logo_visibility, LOGO_MAX_HIDDEN, hex_clean, BRAND)
 
 CTA_RE = re.compile(r"\b(dm|comment|link|click|tap|follow|visit|call|whatsapp|bio|download|sign\s*up|book|demo)\b", re.I)
 
@@ -262,6 +263,14 @@ def main():
         R.add("minor", "cta", f"CTA ends at {cta_hits[0]['end']:.1f}s, well before the end — consider moving it to the close")
 
     has_logo_card = any(t["kind"] == "logo_card" for t in timeline)
+    for sh in project["shots"]:
+        lf = sh.get("logo_file") or ""
+        if shot_kind(sh) == "logo_card" and lf and Path(lf).exists():
+            bg = hex_clean(sh.get("card_bg") or project.get("logo", {}).get("card_bg"), BRAND["purple"])
+            vis = logo_visibility(lf, [bg])
+            if vis["transparent"] >= 0.30 and vis["hidden"] > LOGO_MAX_HIDDEN:
+                R.add("major", "brand", f"{sh['shot_id']}: {vis['hidden']:.0%} of the logo ({Path(lf).name}) blends into the "
+                                        f"{bg} card — add a logo variant that contrasts with it to the logo folder")
     logo_mode = project.get("logo", {}).get("mode", "end_only")
     if not has_logo_card and logo_mode in ("end_only", "none"):
         R.add("major", "brand", "No T5 logo card and no corner bug — brand-linkage test will fail")

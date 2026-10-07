@@ -125,7 +125,7 @@ Column A holds the setting name and column B its value. Values start on row 3. T
 | `assets_folder` | `C:\VideoProjects\Assets` | Where downloads go |
 | `output_filename` | `academy_reel.mp4` | |
 | `vo_path` | `C:\VideoProjects\VO\academy_vo.mp3` | Your recorded voiceover. Leave blank for a music-only video |
-| `logo_path` | `C:\VideoProjects\Brand\logo.png` | A transparent PNG works best |
+| `logo_path` | `C:\VideoProjects\Brand\logo.png` | A transparent PNG works best. Keep your other logo versions (white, black, colour) in the **same folder**: if part of this logo would blend into the background, the most visible version is used automatically |
 | `text_font` | `Inter` | The bundled brand font. If this says `Arial`, Arial is what you'll get |
 | `music_path` / `bgm_path` | *(optional)* | Background music. Leave blank if you have none |
 | `sting_path` | *(optional)* | Short end sound on the logo card |
@@ -322,6 +322,7 @@ The pipeline stops on purpose instead of producing a broken video. The last line
 - **`--force` re-renders; it never re-downloads.** `--refetch` re-downloads everything and discards your picks, so use it rarely.
 - **Swimming, beach, pool and swimwear shots are cartoon-only.** These subjects are searched only in illustrations, and any real photo of them fails the safety check.
 - **Tamil text works**, using the bundled Noto Sans Tamil. Tamil speech transcription is approximate, so the safety report asks you to listen to the VO yourself before signing off.
+- **The logo picks itself for visibility.** If any part of your logo would disappear against the logo card colour (for example a purple "U" on a purple card), the most visible transparent version from the same folder is used instead. Phase 1 tells you when this happens. For the corner logo (`logo_mode` = `bug`), the footage behind it is sampled. Logos with their own solid background are always used as you chose them.
 - **Keep the workbook closed** in Excel while the pipeline runs.
 
 ---

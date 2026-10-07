@@ -329,6 +329,97 @@ def hex_to_ff(hex_color: str, alpha: float = 1.0, default: str = "#FFFFFF") -> s
     """'#RRGGBB' → '0xRRGGBB@a' for drawtext / color sources."""
     return f"0x{hex_clean(hex_color, default).lstrip('#')}@{alpha:.2f}"
 
+# ── Logo visibility (pick the variant that reads on this background) ────────
+# A brand logo often mixes colours (purple 'U', white 'ni', orange 'Brio'), so one file
+# cannot read on every background: on a purple card the purple 'U' vanishes. Each
+# visible logo pixel is measured with the WCAG contrast ratio against the background;
+# when part of the logo disappears, the best variant from the same folder is used.
+LOGO_MIN_CONTRAST = 3.0      # WCAG 1.4.11 non-text contrast (graphics, logos): below 3:1 a logo pixel does not read
+LOGO_MAX_HIDDEN = 0.02       # more than 2% of the logo invisible → look for a better variant
+LOGO_MIN_TRANSPARENT = 0.30  # variants with an opaque box behind them (< 30% transparent) are not candidates
+_LOGO_CACHE: dict = {}
+
+def _rel_lum(rgb) -> float:
+    def ch(c):
+        c = c / 255.0
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = rgb
+    return 0.2126 * ch(r) + 0.7152 * ch(g) + 0.0722 * ch(b)
+
+def hex_rgb(hex_color: str) -> tuple[int, int, int]:
+    h = hex_clean(hex_color).lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+def _logo_pixels(path: str):
+    """(ink RGB array, transparent share) of a logo, downscaled for speed. Ink = clearly opaque pixels."""
+    key = ("px", path, Path(path).stat().st_mtime)
+    if key not in _LOGO_CACHE:
+        import numpy as np
+        from PIL import Image
+        with Image.open(path) as im:
+            im = im.convert("RGBA")
+            im.thumbnail((480, 480))
+            a = np.asarray(im, np.float32)
+        alpha = a[..., 3]
+        _LOGO_CACHE[key] = (a[alpha >= 160][:, :3], float((alpha < 16).mean()))
+    return _LOGO_CACHE[key]
+
+def logo_visibility(path: str, backgrounds: list) -> dict:
+    """Share of the logo that is invisible, averaged over the backgrounds (one flat card colour, or a grid of
+    footage samples behind a corner bug — one bright patch must not condemn a logo), and the worst
+    10th-percentile contrast."""
+    import numpy as np
+    ink, transparent = _logo_pixels(path)
+    if ink.size == 0:
+        return {"hidden": 1.0, "p10": 1.0, "transparent": transparent}
+    c = ink / 255.0
+    lin = np.where(c <= 0.03928, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+    lum = lin @ np.array([0.2126, 0.7152, 0.0722])
+    hidden, p10 = 0.0, 99.0
+    for bg in backgrounds:
+        lb = _rel_lum(hex_rgb(bg) if isinstance(bg, str) else bg)
+        ratio = (np.maximum(lum, lb) + 0.05) / (np.minimum(lum, lb) + 0.05)
+        hidden += float((ratio < LOGO_MIN_CONTRAST).mean()) / len(backgrounds)
+        p10 = min(p10, float(np.percentile(ratio, 10)))
+    return {"hidden": hidden, "p10": p10, "transparent": transparent}
+
+def logo_variants(path: str) -> list[str]:
+    """The given logo plus every transparent PNG/WebP variant in the same folder."""
+    p = Path(path)
+    out = [str(p)]
+    for f in sorted(p.parent.glob("*")):
+        if f.suffix.lower() in (".png", ".webp") and f.resolve() != p.resolve():
+            try:
+                if _logo_pixels(str(f))[1] >= LOGO_MIN_TRANSPARENT:
+                    out.append(str(f))
+            except Exception:
+                pass
+    return out
+
+def best_logo(path: str, backgrounds: list) -> tuple[str, str]:
+    """(logo file to use, note). Keeps the given logo while it is fully visible on every background;
+    otherwise picks the variant from its folder with the least invisible area, then the highest contrast."""
+    if not path or not Path(path).exists() or not backgrounds:
+        return path, ""
+    try:
+        own = logo_visibility(path, backgrounds)
+        if own["transparent"] < LOGO_MIN_TRANSPARENT:
+            return path, ""          # carries its own background (a badge or photo): always readable, keep the choice
+        if own["hidden"] <= LOGO_MAX_HIDDEN:
+            return path, ""
+        scored = []
+        for f in logo_variants(path):
+            v = logo_visibility(f, backgrounds)
+            scored.append((v["hidden"] > LOGO_MAX_HIDDEN, round(v["hidden"], 3), -v["p10"], f, v))
+        scored.sort(key=lambda t: t[:3])
+        _, _, _, pick, v = scored[0]
+        if pick == path:
+            return path, f"{Path(path).name}: {own['hidden']:.0%} of the logo is hard to see and no variant is better"
+        return pick, (f"{Path(path).name}: {own['hidden']:.0%} of the logo blends into the background → "
+                      f"using {Path(pick).name} ({v['hidden']:.0%} hidden)")
+    except Exception as e:
+        return path, f"logo visibility check failed ({e.__class__.__name__}) — using {Path(path).name}"
+
 def is_light(hex_color: str) -> bool:
     h = hex_clean(hex_color).lstrip("#")
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)

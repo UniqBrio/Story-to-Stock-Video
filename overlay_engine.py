@@ -17,6 +17,7 @@ tamil-text-overlay-typography · README §2):
   • Tamil    : detected per line → Noto Sans Tamil → Nirmala UI; drawn by libass (`ass` filter),
                because drawtext never reorders pre-base vowel signs (கை would read க + ை)
   • Logo     : end_only (default — the T5 card carries the logo) · bug · both · none;
+               the bug uses the logo variant (same folder) that stays visible on the footage behind it;
                a bug never appears on cards, and per-shot Logo Bug yes/no overrides
   • Restraint: one element at a time — overlays on T4 product inserts are dropped
 
@@ -28,6 +29,7 @@ Usage:
 import sys
 import shutil
 import argparse
+import subprocess
 from pathlib import Path
 
 from svos_common import (load_project, save_project, check_ffmpeg, run_ff, probe_video_info,
@@ -35,7 +37,7 @@ from svos_common import (load_project, save_project, check_ffmpeg, run_ff, probe
                          ff_escape_text, fit_text, measure_text, is_tamil, is_light, hex_to_ff,
                          hex_clean, safe_zones, words, banner, set_log, output_dir, BRAND,
                          font_family, ass_color, ass_escape, ass_document, ass_time, ass_filter,
-                         ass_size_scale, stage_ass_fonts)
+                         ass_size_scale, stage_ass_fonts, best_logo)
 
 STYLE = {
     #            size×   lines  upper  default pos      anim-in  anim-out
@@ -256,6 +258,31 @@ def _ass_lines(lines, font, size, color, style, anim, a_in, a_out, start, end,
     return out
 
 
+def bug_box(position: str, tw: int, th: int, sz: dict, logo_w: int) -> tuple[int, int, int, int]:
+    """Approximate pixel box (x, y, w, h) the corner bug covers — the footage it must stand out from."""
+    pad, h = int(tw * 0.045), max(8, logo_w // 3)
+    x = {"top_left": pad, "bottom_left": pad, "center": (tw - logo_w) // 2}.get(position, tw - logo_w - pad)
+    y = {"bottom_left": th - sz["bottom"] - pad // 2 - h, "bottom_right": th - sz["bottom"] - pad // 2 - h,
+         "center": (th - h) // 2}.get(position, sz["top"] + pad // 2)
+    return x, y, logo_w, h
+
+
+def bug_backgrounds(video: str, wins: list, box: tuple) -> list[tuple[int, int, int]]:
+    """Colours of the footage behind the bug: an 8×3 grid from up to 9 frames across its windows."""
+    x, y, w, h = box
+    times = []
+    for a, b in wins:
+        times += [a + (b - a) * f for f in (0.2, 0.5, 0.8)]
+    out = []
+    for t in times[:9]:
+        r = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{t:.3f}", "-i", str(video), "-frames:v", "1",
+                            "-vf", f"crop={w}:{h}:{x}:{y},scale=8:3:flags=area", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                           capture_output=True, timeout=60)
+        px = r.stdout
+        out += [tuple(px[i:i + 3]) for i in range(0, len(px) - 2, 3)]
+    return out
+
+
 def logo_windows(project: dict, timeline: list[dict]) -> list[tuple[float, float]]:
     """Time windows in which the corner logo bug is visible."""
     mode = (project.get("logo", {}).get("mode") or "end_only").lower()
@@ -331,20 +358,31 @@ def main():
     blocked = [f"{s['shot_id']}: {safety.require_text(project, s['text_overlay'])}" for s in project["shots"]
                if (s.get("text_overlay") or "").strip() and shot_kind(s) != "product"
                and safety.require_text(project, s["text_overlay"])]
-    lp = project.get("logo", {}).get("path", "")
-    if lp and Path(lp).exists() and safety.require_media(project, lp):
-        blocked.append(f"logo: {safety.require_media(project, lp)}")
+    timeline = project.get("timeline") or compute_timeline(project["shots"])
+    logo_cfg = project.get("logo", {})
+    logo_path = logo_cfg.get("path", "")
+    wins = logo_windows(project, timeline) if logo_path and Path(logo_path).exists() else []
+    logo_note = ""
+    if wins:      # corner bug: pick the variant that stays visible on the footage it sits over
+        logo_w = int(tw * float(logo_cfg.get("scale", 0.12)))
+        sz0 = safe_zones(tw, th, project.get("platform", "reels"))
+        bgs = bug_backgrounds(assembled, wins, bug_box(logo_cfg.get("position", "top_right"), tw, th, sz0, logo_w))
+        pick, logo_note = best_logo(logo_path, bgs)
+        if pick != logo_path and not safety.require_media(project, pick):
+            logo_path = pick
+        elif pick != logo_path:
+            logo_note += " — that variant has not passed the safety check, keeping the original"
+    if logo_path and Path(logo_path).exists() and wins and safety.require_media(project, logo_path):
+        blocked.append(f"logo: {safety.require_media(project, logo_path)}")
     if blocked:
         print("  🛡   Not rendered — content not cleared:\n" + "\n".join(f"     • {b}" for b in blocked))
         sys.exit(1)
 
-    timeline = project.get("timeline") or compute_timeline(project["shots"])
     filters, manifest, audit = build_overlays(project, timeline, ass_dir=out_file.parent)
     audit += restraint_audit(project, manifest)
 
-    logo_cfg = project.get("logo", {})
-    logo_path = logo_cfg.get("path", "")
-    wins = logo_windows(project, timeline) if logo_path and Path(logo_path).exists() else []
+    if logo_note:
+        audit.append(f"logo bug: {logo_note}")
     if logo_path and not Path(logo_path).exists() and (logo_cfg.get("mode") in ("bug", "both")):
         audit.append(f"logo file missing: {logo_path}")
 

@@ -122,7 +122,7 @@ def normalise_shot(shot: dict, project: dict, out_dir: Path, force: bool) -> tup
     # U-rated gate: nothing is rendered unless the content-safety check cleared this exact file and window
     import content_safety as safety
     if kind == "logo_card":
-        logo_src = shot.get("local_file") or logo_cfg.get("path", "")
+        logo_src = shot.get("logo_file") or shot.get("local_file") or logo_cfg.get("path", "")
         blocked = safety.require_media(project, logo_src) if logo_src and Path(logo_src).exists() else ""
     elif kind in ("stock", "product") and shot.get("local_file") and Path(shot["local_file"]).exists():
         blocked = safety.require_media(project, shot["local_file"], bool(shot.get("illustration_only")),
@@ -158,7 +158,7 @@ def normalise_shot(shot: dict, project: dict, out_dir: Path, force: bool) -> tup
     # ── T5 logo card ──────────────────────────────────────────────────────────
     if kind == "logo_card":
         bg = hex_clean(shot.get("card_bg") or logo_cfg.get("card_bg"), BRAND["purple"])
-        logo = shot.get("local_file") or logo_cfg.get("path", "")
+        logo = shot.get("logo_file") or shot.get("local_file") or logo_cfg.get("path", "")
         if not logo or not Path(logo).exists():
             print(f"    ⚠️  {sid} — logo file missing ({logo}); rendering a plain brand frame")
             cmd = ["ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c={bg}:s={tw}x{th}:r={fps}:d={duration:.3f}",

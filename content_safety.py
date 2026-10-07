@@ -730,7 +730,7 @@ def asset_items(project: dict) -> list[dict]:
             add({"kind": "media", "role": role, "shot_id": sid, "label": f"Shot {sid} {role}", "path": lf,
                  "illustration_only": illu, "window": window})
         if kind == "logo_card":
-            logo = lf or project.get("logo", {}).get("path", "")
+            logo = s.get("logo_file") or lf or project.get("logo", {}).get("path", "")
             if logo:
                 add({"kind": "media", "role": "logo", "shot_id": sid, "label": f"Shot {sid} logo card",
                      "path": logo, "illustration_only": False, "window": None})
@@ -746,6 +746,11 @@ def asset_items(project: dict) -> list[dict]:
     if logo:
         add({"kind": "media", "role": "logo", "shot_id": "", "label": "Logo", "path": logo, "illustration_only": False,
              "window": None})
+        if (project.get("logo", {}).get("mode") or "").lower() in ("bug", "both") and Path(logo).exists():
+            from svos_common import logo_variants      # the corner bug picks a variant after seeing the footage
+            for v in logo_variants(logo)[1:]:
+                add({"kind": "media", "role": "logo", "shot_id": "", "label": f"Logo variant {Path(v).name}",
+                     "path": v, "illustration_only": False, "window": None})
     for k, role in (("vo_path", "voiceover"), ("music_path", "music"), ("bgm_path", "background music"),
                     ("sting_path", "end sting")):
         p = project.get("audio", {}).get(k, "")
