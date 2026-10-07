@@ -153,6 +153,27 @@ def _speak(text: str, wav: Path) -> None:
         subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=True, capture_output=True)
 
 
+class WhisperGuards(unittest.TestCase):
+    """Music and tones must not turn into hallucinated text (it can trip the blocklist by chance)."""
+
+    def test_repetition_loop_is_cut_to_one_copy(self):
+        sys.path.insert(0, str(HERE / "safety"))
+        from whisper_onnx import WhisperOnnx
+        self.assertEqual(WhisperOnnx._loop_start([5, 7, 8, 7, 8, 7, 8]), 3)       # keep [5, 7, 8]
+        self.assertEqual(WhisperOnnx._loop_start([9, 9, 9]), 1)
+        self.assertEqual(WhisperOnnx._loop_start([1, 2, 3, 4, 5]), -1)
+
+    @unittest.skipUnless(MODELS_READY, "needs the safety models")
+    def test_music_like_tone_gives_no_transcript(self):
+        with tempfile.TemporaryDirectory() as d:
+            wav = Path(d) / "tone.wav"
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                            "sine=frequency=330:sample_rate=16000:duration=12", "-af",
+                            "volume='if(lt(mod(t\\,1)\\,0.5)\\,0.5\\,0.2)':eval=frame", str(wav)], check=True)
+            tr = cs.transcribe(cs.Engines(cs.models_dir()), wav, [""])
+            self.assertEqual(tr["auto"], "")
+
+
 @unittest.skipUnless(MODELS_READY and (shutil.which("espeak-ng") or sys.platform == "win32"),
                      "needs the safety models and espeak-ng (or Windows)")
 class Speech(unittest.TestCase):

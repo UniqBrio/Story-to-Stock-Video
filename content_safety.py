@@ -57,7 +57,7 @@ from pathlib import Path
 from datetime import datetime
 
 HERE = Path(__file__).resolve().parent
-POLICY_VERSION = "u-rated-2026-09-30.1"
+POLICY_VERSION = "u-rated-2026-10-07.1"     # bump on any prompt/threshold change: re-checks every item
 
 # ── Models (downloaded once by --setup, verified by SHA-256) ─────────────────
 _CLIP_BASE = ("https://clip-as-service.s3.us-east-2.amazonaws.com/"
@@ -124,6 +124,13 @@ SAFE_PROMPTS = [
     "a cartoon of a person doing sports", "a surfer riding a wave", "a person running", "a family at home",
     "a title card with text on a solid colour background", "a call to action slide with a brand name",
     "a slide with a logo and text", "white words on a purple background",
+    # everyday postures and close-ups: without these, CLIP's nearest match for a person slumped over books or
+    # hands around a phone was "a person in a sexually suggestive pose" / "a photo of a naked person" (2026-10-07)
+    "a tired person resting their head on a desk", "a person asleep on a stack of books", "a person sitting on the floor",
+    "an exhausted person slumped over", "a fully clothed person lying down to rest",
+    "a person sitting with their head in their hands", "a student studying with books", "a person napping",
+    "a stressed person at work", "close-up of hands holding a smartphone", "a person's hands typing on a phone",
+    "hands on a laptop keyboard", "a blurred beige wall", "a close-up of a hand",
 ]
 PHOTO_PROMPTS = ["a photograph of a real person", "a real photo", "a photo of real people", "a video still of a real person",
                  "a product photo"]
@@ -139,6 +146,8 @@ NUDE_EXPOSED = {"FEMALE_BREAST_EXPOSED", "FEMALE_GENITALIA_EXPOSED", "MALE_GENIT
 NUDE_COVERED = {"FEMALE_BREAST_COVERED", "FEMALE_GENITALIA_COVERED", "BUTTOCKS_COVERED", "ANUS_COVERED"}
 NUDE_EXPOSED_REVIEW, NUDE_EXPOSED_FAIL, NUDE_COVERED_REVIEW = 0.60, 0.65, 0.60
 NUDITY_CLIP_ALONE_FAIL = 0.70     # CLIP alone fails nudity only when very sure; otherwise it needs NudeNet to agree
+COVERED_NEEDS_CLIP = 0.15         # NudeNet "…_COVERED" fires on any clothed chest (a buttoned shirt); it only asks for a
+                                  # review when CLIP also sees revealing clothing (its swimwear/lingerie category)
 
 DEFAULT_ILLUSTRATION_SUBJECTS = [
     "swim", "swimming", "swimmer", "swimsuit", "swimwear", "bikini", "beach", "beachwear", "poolside", "swimming pool",
@@ -611,7 +620,8 @@ def judge_frame(eng: Engines, frame: Path, illustration_only: bool, do_ocr: bool
             status = worst(status, FAIL); reasons.append(f"nudity detector: {cls.lower()} {sc:.2f}")
         elif cls in NUDE_EXPOSED and sc >= NUDE_EXPOSED_REVIEW:
             status = worst(status, REVIEW); reasons.append(f"nudity detector (possible): {cls.lower()} {sc:.2f}")
-        elif cls in NUDE_COVERED and sc >= NUDE_COVERED_REVIEW and not (illustration_only and photo < PHOTO_REVIEW):
+        elif (cls in NUDE_COVERED and sc >= NUDE_COVERED_REVIEW and cats.get("swimwear", 0) >= COVERED_NEEDS_CLIP
+              and not (illustration_only and photo < PHOTO_REVIEW)):
             status = worst(status, REVIEW); reasons.append(f"revealing clothing? {cls.lower()} {sc:.2f}")
     if illustration_only:
         if photo >= PHOTO_FAIL:
