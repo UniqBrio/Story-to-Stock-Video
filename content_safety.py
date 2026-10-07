@@ -57,7 +57,7 @@ from pathlib import Path
 from datetime import datetime
 
 HERE = Path(__file__).resolve().parent
-POLICY_VERSION = "u-rated-2026-10-07.1"     # bump on any prompt/threshold change: re-checks every item
+POLICY_VERSION = "u-rated-2026-10-07.2"     # bump on any prompt/threshold change: re-checks every item
 
 # ── Models (downloaded once by --setup, verified by SHA-256) ─────────────────
 _CLIP_BASE = ("https://clip-as-service.s3.us-east-2.amazonaws.com/"
@@ -131,6 +131,9 @@ SAFE_PROMPTS = [
     "a person sitting with their head in their hands", "a student studying with books", "a person napping",
     "a stressed person at work", "close-up of hands holding a smartphone", "a person's hands typing on a phone",
     "hands on a laptop keyboard", "a blurred beige wall", "a close-up of a hand",
+    # desk objects: a phone edge over a spiral notebook read as "a knife or blade" (2026-10-07)
+    "a spiral notebook on a desk", "a planner or notebook", "a phone lying on a notebook", "a vase with flowers",
+    "a pen on a desk", "stationery on a desk", "a coffee mug", "a desk lamp",
 ]
 PHOTO_PROMPTS = ["a photograph of a real person", "a real photo", "a photo of real people", "a video still of a real person",
                  "a product photo"]
@@ -145,6 +148,8 @@ NUDE_EXPOSED = {"FEMALE_BREAST_EXPOSED", "FEMALE_GENITALIA_EXPOSED", "MALE_GENIT
                 "ANUS_EXPOSED"}
 NUDE_COVERED = {"FEMALE_BREAST_COVERED", "FEMALE_GENITALIA_COVERED", "BUTTOCKS_COVERED", "ANUS_COVERED"}
 NUDE_EXPOSED_REVIEW, NUDE_EXPOSED_FAIL, NUDE_COVERED_REVIEW = 0.60, 0.65, 0.60
+FLICKER_CATEGORIES = ("weapons", "violence", "alcohol", "drugs", "horror")   # a REVIEW-level hit in one video frame
+                                  # only is a misreading flicker; a real object stays on screen. Nudity/swimwear excluded
 NUDITY_CLIP_ALONE_FAIL = 0.70     # CLIP alone fails nudity only when very sure; otherwise it needs NudeNet to agree
 COVERED_NEEDS_CLIP = 0.15         # NudeNet "…_COVERED" fires on any clothed chest (a buttoned shirt); it only asks for a
                                   # review when CLIP also sees revealing clothing (its swimwear/lingerie category)
@@ -646,6 +651,32 @@ def judge_frame(eng: Engines, frame: Path, illustration_only: bool, do_ocr: bool
             "photo": round(photo, 3), "faces": faces, "ocr": text}
 
 
+_FLICKER_RE = re.compile(r"^possible (" + "|".join(FLICKER_CATEGORIES) + r") [0-9.]+$")
+
+
+def _drop_flicker(results: list) -> list:
+    """In a video (≥ 3 frames), a REVIEW-level CLIP hit for an object category seen in ONE frame only is
+    dropped (and noted); two or more frames, or any FAIL-level hit, still counts."""
+    if len(results) < 3:
+        return []
+    count = {}
+    for r in results:
+        for x in {re.sub(r" [0-9.]+$", "", x) for x in r["reasons"] if _FLICKER_RE.match(x)}:
+            count[x] = count.get(x, 0) + 1
+    notes = []
+    for r in results:
+        keep = []
+        for x in r["reasons"]:
+            if _FLICKER_RE.match(x) and count.get(re.sub(r" [0-9.]+$", "", x), 0) < 2:
+                notes.append(f"ignored one-frame flicker: {x} (1 of {len(results)} frames)")
+            else:
+                keep.append(x)
+        if len(keep) < len(r["reasons"]) and r["status"] == REVIEW and not keep:
+            r["status"] = PASS
+        r["reasons"] = keep
+    return notes
+
+
 def judge_media(eng: Engines, path: Path, work: Path, illustration_only=False, window=None, fps=1.0,
                 max_frames=24, ocr_every=2, card: bool = False) -> dict:
     frames = extract_frames(path, work, window, fps, max_frames)
@@ -653,6 +684,7 @@ def judge_media(eng: Engines, path: Path, work: Path, illustration_only=False, w
         return {"status": REVIEW, "reasons": ["could not read any frame — check the file"], "frames": []}
     results = [judge_frame(eng, f, illustration_only, do_ocr=(i % max(1, ocr_every) == 0), card=card)
                for i, f in enumerate(frames)]
+    notes = _drop_flicker(results)
     status = worst(*(r["status"] for r in results))
     reasons, seen = [], set()
     for r in results:
@@ -661,7 +693,7 @@ def judge_media(eng: Engines, path: Path, work: Path, illustration_only=False, w
             if base not in seen:
                 seen.add(base); reasons.append(x)
     flagged = [r for r in results if r["status"] != PASS][:6]
-    return {"status": status, "reasons": reasons, "frames": flagged or results[:1],
+    return {"status": status, "reasons": reasons, "frames": flagged or results[:1], "notes": notes,
             "max_photo": max(r["photo"] for r in results), "n_frames": len(results),
             "ocr": " / ".join(sorted({r["ocr"] for r in results if r["ocr"]}))[:600]}
 

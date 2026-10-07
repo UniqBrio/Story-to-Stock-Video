@@ -153,6 +153,37 @@ def _speak(text: str, wav: Path) -> None:
         subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=True, capture_output=True)
 
 
+class Flicker(unittest.TestCase):
+    """A REVIEW-level object hit in one video frame is a misreading; two frames, or a FAIL, still count."""
+
+    @staticmethod
+    def _frames(*reasons):
+        return [{"status": cs.REVIEW if r else cs.PASS, "reasons": list(r)} for r in reasons]
+
+    def test_one_frame_weapon_review_is_dropped(self):
+        rs = self._frames([], [], ["possible weapons 0.43"], [], [])
+        notes = cs._drop_flicker(rs)
+        self.assertTrue(all(r["status"] == cs.PASS for r in rs))
+        self.assertIn("1 of 5 frames", notes[0])
+
+    def test_two_frames_still_review(self):
+        rs = self._frames(["possible weapons 0.41"], [], ["possible weapons 0.43"], [], [])
+        cs._drop_flicker(rs)
+        self.assertEqual(sum(r["status"] == cs.REVIEW for r in rs), 2)
+
+    def test_nudity_and_fail_hits_are_never_dropped(self):
+        rs = self._frames([], ["possible nudity 0.33"], [], [], [])
+        rs[3] = {"status": cs.FAIL, "reasons": ["weapons 0.65"]}
+        cs._drop_flicker(rs)
+        self.assertEqual(rs[1]["status"], cs.REVIEW)
+        self.assertEqual(rs[3]["status"], cs.FAIL)
+
+    def test_stills_are_not_affected(self):
+        rs = self._frames(["possible weapons 0.43"])
+        cs._drop_flicker(rs)
+        self.assertEqual(rs[0]["status"], cs.REVIEW)
+
+
 class WhisperGuards(unittest.TestCase):
     """Music and tones must not turn into hallucinated text (it can trip the blocklist by chance)."""
 

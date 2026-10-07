@@ -523,6 +523,7 @@ def build_project(xlsx_path: Path, prev_json: Path | None = None) -> tuple[dict,
             "safe_zones":    to_bool(settings.get("safe_zones"), True),
             "overlay_budget": to_int(settings.get("overlay_budget"), 5),
             "card_budget":    to_int(settings.get("card_budget"), 3),
+            "match_vo":       to_bool(settings.get("match_text_to_vo"), True),   # vo_aligner may fix mismatched text
         },
         "fetch": {
             "max_queries_per_shot": max(1, to_int(settings.get("max_queries_per_shot"), 3)),

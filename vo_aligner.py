@@ -46,8 +46,9 @@ LEAD, FIRST_LEAD, TAIL = 0.15, 0.10, 0.25   # breathing room around each shot's 
 MAX_GAP = 0.35                              # longest pause kept between phrases inside a shot
 MIN_CONFIDENCE = 0.50                       # below this share of confidently matched shots → ask
 MAX_GROWTH = 0.30                           # video may grow by 30 % to fit the words before we ask
+TRUST_LOGPROB = -0.6                        # full-transcript confidence needed before on-screen text is rewritten
 STOP = {"a", "an", "the", "and", "or", "to", "of", "in", "on", "at", "for", "is", "are", "was", "it", "you", "your",
-        "we", "our", "i", "my", "this", "that", "with", "by", "be", "so", "but", "if", "what", "dm"}
+        "we", "our", "i", "my", "this", "that", "with", "by", "be", "so", "but", "if", "what", "dm", "then"}
 
 
 # ── Text matching ────────────────────────────────────────────────────────────
@@ -99,7 +100,44 @@ def phrases(vo: str) -> list[tuple[float, float]]:
     return detect_speech(vo, 0.0, probe_duration(vo))
 
 
-def transcribe_phrases(project: dict, vo: str, segs: list) -> list[str]:
+def _norm(w: str) -> str:
+    return re.sub(r"[^\w]", "", w.lower())
+
+
+def locate_words(per_phrase: list[str], full: str) -> list[str]:
+    """Split an accurate full transcript back into phrases. Short phrases transcribed alone lose context
+    ('Fees to chase' → 'Cheese to cheese'); the whole recording transcribes almost perfectly. The phrase-level
+    words only anchor where each phrase sits in the full text (fuzzy sequence alignment)."""
+    fw = full.split()
+    if not fw:
+        return per_phrase
+    pw, owner = [], []
+    for k, t in enumerate(per_phrase):
+        for w in t.split():
+            pw.append(_norm(w)); owner.append(k)
+    idx = [None] * len(fw)
+    for blk in SequenceMatcher(None, pw, [_norm(w) for w in fw], autojunk=False).get_matching_blocks():
+        for d in range(blk.size):
+            idx[blk.b + d] = owner[blk.a + d]
+    # unmatched words join the previous phrase, or the next one after a clause/sentence break
+    prev = 0
+    for i in range(len(fw)):
+        if idx[i] is not None:
+            prev = idx[i]
+            continue
+        nxt = next((idx[j] for j in range(i + 1, len(fw)) if idx[j] is not None), prev)
+        broke = i > 0 and re.search(r"[.,!?;:…]$", fw[i - 1])
+        idx[i] = nxt if (broke and nxt > prev) else prev
+        if broke and nxt > prev:
+            prev = nxt
+    out = [[] for _ in per_phrase]
+    for w, k in zip(fw, idx):
+        out[k].append(w)
+    return [" ".join(x) for x in out]
+
+
+def transcribe_phrases(project: dict, vo: str, segs: list) -> tuple[list[str], bool]:
+    """(text per phrase, trusted). Trusted = Whisper was confident on the full recording."""
     try:
         import numpy as np
         import content_safety as cs
@@ -108,14 +146,68 @@ def transcribe_phrases(project: dict, vo: str, segs: list) -> list[str]:
         audio = np.frombuffer(raw, np.float32)
         lang = (project.get("safety", {}).get("vo_language") or "auto").lower()
         asr = cs.Engines(cs.models_dir(project)).asr("" if lang == "auto" else lang)
-        out = []
+        per = []
         for a, b in segs:
             clip = audio[int(max(0.0, a - 0.15) * 16000):int((b + 0.15) * 16000)]
-            out.append(asr.transcribe(clip) if clip.size > 1600 else "")
-        return out
+            per.append(asr.transcribe(clip) if clip.size > 1600 else "")
+        # whole recording in ≤ 28 s windows cut at phrase boundaries
+        out, trusted, g = [], True, 0
+        while g < len(segs):
+            h = g
+            while h + 1 < len(segs) and segs[h + 1][1] - segs[g][0] <= 28.0:
+                h += 1
+            a, b = segs[g][0], segs[h][1]
+            full = asr.transcribe(audio[int(max(0.0, a - 0.15) * 16000):int((b + 0.15) * 16000)])
+            trusted &= bool(full) and getattr(asr, "last_avg_logprob", -9) >= TRUST_LOGPROB
+            out += locate_words(per[g:h + 1], full)
+            g = h + 1
+        return out, trusted
     except Exception as e:                                  # no models → align on timing alone, and say so
         print(f"  ⚠️  Could not transcribe the voiceover ({e.__class__.__name__}) — aligning on timing only")
-        return [""] * len(segs)
+        return [""] * len(segs), False
+
+
+# ── On-screen text that matches what is said ─────────────────────────────────
+SPECIFIC = re.compile(r"^(\d+|am|pm|monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tonight|"
+                      r"january|february|march|april|may|june|july|august|september|october|november|december)$")
+LEADING = {"but", "and", "so", "then", "or", "because", "now"}
+
+
+def content_words(text: str) -> list[str]:
+    """Meaningful words of on-screen text. Numbers, times and day/month names are deliberate details that
+    complement the voice ('11:41 PM. Sunday.' over 'Late nights…'), so they never count as a mismatch."""
+    return [w for w in words(text) if not SPECIFIC.match(w)]
+
+
+def text_contradicts(overlay: str, spoken: str) -> bool:
+    cw = content_words(overlay)
+    return bool(cw) and bool(words(spoken)) and _hits(" ".join(cw), spoken)[0] == 0
+
+
+def snippet(spoken: str, budget: int) -> str:
+    """A short on-screen line taken from the spoken words: the clause with the most meaningful words
+    (ties → shorter), its tail if it is longer than the style allows, leading 'but/and/so' dropped."""
+    clauses = [c.strip() for c in re.split(r"(?<=[,.!?;:…])\s+", spoken) if c.strip()]
+    def trim(c):
+        ws = c.split()
+        while ws and _norm(ws[0]) in LEADING:
+            ws = ws[1:]
+        if len(ws) > budget:
+            ws = ws[-budget:]
+            while len(ws) > 1 and _norm(ws[0]) in STOP | LEADING:
+                ws = ws[1:]
+        return " ".join(ws)
+    best = max((trim(c) for c in clauses), key=lambda c: (len(words(c)), -len(c.split())), default="")
+    best = best.rstrip(",;:")
+    if best and best[-1] not in ".!?…":
+        best += "."
+    return best[:1].upper() + best[1:]
+
+
+def reading_need(text: str, tamil: bool = False) -> float:
+    """Seconds an overlay must stay up (same table as overlay_engine's restraint audit)."""
+    n = len((text or "").split())
+    return (1.5 if n <= 1 else 2.0 if n <= 4 else 2.5 if n <= 7 else 3.5) + (0.5 if tamil else 0.0)
 
 
 # ── Alignment ────────────────────────────────────────────────────────────────
@@ -167,24 +259,77 @@ def align(shots: list, segs: list, texts: list, brand: str = "") -> list[tuple[i
 
 
 # ── Plan ─────────────────────────────────────────────────────────────────────
-def build_plan(project: dict, vo: str, accept: bool) -> tuple[dict, list[str]]:
-    shots = project["shots"]
-    segs = phrases(vo)
-    texts = transcribe_phrases(project, vo, segs)
-    brand = brand_words(project)
-    ranges = align(shots, segs, texts, brand)
+def match_text_to_voice(project: dict, shots: list, ranges: list, texts: list, trusted: bool) -> list:
+    """Rewrite T2/T3 on-screen text that shares no meaningful word with what is said over the shot.
+    Source: the shot's VO Line if typed (exact), else the transcript — only when Whisper was confident.
+    Cards, the logo/CTA card and product inserts are never touched. Setting: match_text_to_vo (default on)."""
+    if not project.get("text", {}).get("match_vo", True):
+        return []
+    out = []
+    for s, (i, j) in zip(shots, ranges):
+        overlay = (s.get("text_overlay_sheet") or s.get("text_overlay") or "").strip()
+        if not overlay or shot_kind(s) != "stock" or j == i:
+            continue
+        typed = (s.get("vo_line") or "").strip()
+        spoken = typed or " ".join(t for t in texts[i:j] if t)
+        if not spoken or not (typed or trusted) or not text_contradicts(overlay, spoken):
+            continue
+        style = (s.get("text_style") or "auto").lower()
+        new = snippet(spoken, 4 if style == "keyword" else 7)
+        if new and new.lower() != overlay.lower():
+            s["text_overlay_sheet"] = overlay
+            s["text_overlay"] = new
+            out.append((s["shot_id"], overlay, new, "VO Line" if typed else "voiceover"))
+    return out
 
-    # lengthen shots that cannot hold their words; never shorten
+
+def fit_durations(shots: list, need_speech: dict) -> list:
+    """Each shot lasts at least as long as its spoken words AND its on-screen text needs to be read.
+    Never shorter than planned. Text windows are stretched to the reading minimum inside the shot."""
     changes = []
-    for k, (s, (i, j)) in enumerate(zip(shots, ranges)):
-        s.setdefault("planned_duration", float(s.get("duration", 4.0)))
-        need = speech_span(segs, i, j) + (FIRST_LEAD if k == 0 else LEAD) + TAIL + float(s.get("trans_dur", 0) or 0)
-        new = max(float(s["planned_duration"]), round(need + 0.049, 1)) if j > i else float(s["planned_duration"])
-        if new > float(s["planned_duration"]) + 1e-6:
-            changes.append((s["shot_id"], float(s["planned_duration"]), new))
+    prev_text = False
+    for s in shots:
+        planned = float(s.setdefault("planned_duration", float(s.get("duration", 4.0))))
+        speech = need = need_speech.get(s["shot_id"], 0.0)
+        text = (s.get("text_overlay") or "").strip()
+        if text and shot_kind(s) != "product":
+            t0 = float(s.get("text_start", 0) or 0)
+            if prev_text and t0 < 0.2 and shot_kind(s) == "stock":
+                t0 = 0.2                                     # ≥ 0.5 s between consecutive overlays
+            from svos_common import is_tamil
+            t1 = max(float(s.get("text_end", 0) or 0), t0 + reading_need(text, is_tamil(text)))
+            s["text_start"], s["text_end"] = round(t0, 2), round(t1, 2)
+            margin = 0.0 if shot_kind(s) in ("card", "logo_card") else (0.5 if s.get("trans_dur") else 0.3)
+            need = max(need, t1 + margin)
+        new = max(planned, round(need + 0.049, 1)) if need else planned
+        if new > planned + 1e-6:
+            changes.append((s["shot_id"], planned, new, "spoken words" if speech >= need - 1e-6 else "reading time"))
         s["duration"] = new
         if shot_kind(s) not in ("card", "logo_card"):
             s["trim_out"] = round(float(s.get("trim_in", 0) or 0) + new, 3)
+        prev_text = bool(text) and shot_kind(s) != "product"
+    return changes
+
+
+
+def build_plan(project: dict, vo: str, accept: bool) -> tuple[dict, list[str]]:
+    shots = project["shots"]
+    segs = phrases(vo)
+    texts, trusted = transcribe_phrases(project, vo, segs)
+    brand = brand_words(project)
+    ranges = align(shots, segs, texts, brand)
+
+    # on-screen text that says something different from the voice → a line from what is said
+    text_changes = match_text_to_voice(project, shots, ranges, texts, trusted)
+
+    # lengthen shots that cannot hold their words; never shorten
+    need_speech = {}
+    for k, (s, (i, j)) in enumerate(zip(shots, ranges)):
+        s.setdefault("planned_duration", float(s.get("duration", 4.0)))
+        if j > i:
+            need_speech[s["shot_id"]] = (speech_span(segs, i, j) + (FIRST_LEAD if k == 0 else LEAD) + TAIL
+                                         + float(s.get("trans_dur", 0) or 0))
+    changes = fit_durations(shots, need_speech)
     timeline = compute_timeline(shots)
     project["timeline"] = timeline
 
@@ -221,7 +366,8 @@ def build_plan(project: dict, vo: str, accept: bool) -> tuple[dict, list[str]]:
     silent_tail = [s["shot_id"] for s, (i, j) in zip(shots, ranges) if j == i and shot_kind(s) not in ("card", "logo_card")]
     plan = {"source": str(vo), "source_mtime": Path(vo).stat().st_mtime, "phrases": len(segs),
             "speech_seconds": round(sum(b - a for a, b in segs), 2), "vo_seconds": round(probe_duration(vo), 2),
-            "placements": placements, "map": rows, "duration_changes": changes, "planned_total": round(planned_total, 2),
+            "placements": placements, "map": rows, "duration_changes": changes, "text_changes": text_changes,
+            "transcript_trusted": trusted, "planned_total": round(planned_total, 2),
             "total": round(total, 2), "confidence": round(confidence, 2), "questions": questions,
             "accepted": bool(accept), "silent_shots": silent_tail}
     return plan, questions
@@ -239,14 +385,27 @@ def write_report(project: dict, proj_path: Path, plan: dict) -> Path:
         md.append(f"| {r['shot_id']} | {r['start']:.1f}–{r['end']:.1f}s | {r['heard'] or '—'} | "
                   f"{r['reference'] or '—'} ({r['reference_from'] or 'none'}) | {r['match']:.0%} |")
     if plan["duration_changes"]:
-        md += ["", "Lengthened to fit the words: " +
-               ", ".join(f"{sid} {a:g}s → {b:g}s" for sid, a, b in plan["duration_changes"])]
+        md += ["", "Lengthened: " +
+               ", ".join(f"{sid} {a:g}s → {b:g}s ({why})" for sid, a, b, why in plan["duration_changes"])]
+    if plan.get("text_changes"):
+        md += ["", "On-screen text changed to match the voiceover:", ""]
+        md += [f"- {sid}: “{old}” → “{new}” (from the {src})" for sid, old, new, src in plan["text_changes"]]
     if plan["questions"]:
         md += ["", "## Questions", *[f"- {q}" for q in plan["questions"]], "",
                "Suggested VO Line per shot (paste into the sheet, correcting any mis-heard words):", ""]
         md += [f"- {r['shot_id']}: {r['heard']}" for r in plan["map"] if r["heard"]]
     out.write_text("\n".join(md) + "\n", encoding="utf-8")
     return out
+
+
+def reading_only(project: dict, proj_path: Path, why: str) -> None:
+    """Without an aligned voiceover, still make every shot long enough to read its on-screen text."""
+    changes = fit_durations(project["shots"], {})
+    project["timeline"] = compute_timeline(project["shots"])
+    save_project(project, proj_path)
+    print(f"  ℹ️  {why} — checked reading time only")
+    for sid, a, b, w in changes:
+        print(f"  ↔  {sid} lengthened {a:g}s → {b:g}s ({w})")
 
 
 def main():
@@ -261,8 +420,7 @@ def main():
     vo = project.get("audio", {}).get("vo_path", "")
     if not vo or not Path(vo).exists():
         project.pop("vo_plan", None)
-        save_project(project, proj_path)
-        print("  ℹ️  No voiceover — nothing to align")
+        reading_only(project, proj_path, "No voiceover")
         return
 
     plan, questions = build_plan(project, vo, args.accept)
@@ -271,8 +429,8 @@ def main():
         # not help, so keep the voiceover exactly as recorded, from the start of the video
         project = load_project(proj_path)                     # undo the trial duration changes
         project.pop("vo_plan", None)
-        save_project(project, proj_path)
         print("  ⚠️  No words could be heard in the voiceover — using it as recorded, from the start (no alignment)")
+        reading_only(project, proj_path, "Voiceover not aligned")
         return
     project["vo_plan"] = plan
     save_project(project, proj_path)
@@ -285,8 +443,10 @@ def main():
         mark = "✅" if r["match"] >= 0.30 else ("·" if not r["phrases"] else "❔")
         print(f"  {mark} {r['shot_id']} {r['start']:5.1f}–{r['end']:5.1f}s  “{r['heard'] or '—'}”"
               f"   ⟵ {r['reference_from'] or 'no reference'}: {r['reference'][:40] or '—'}")
-    for sid, a, b in plan["duration_changes"]:
-        print(f"  ↔  {sid} lengthened {a:g}s → {b:g}s to fit its words")
+    for sid, a, b, why in plan["duration_changes"]:
+        print(f"  ↔  {sid} lengthened {a:g}s → {b:g}s ({why})")
+    for sid, old, new, src in plan.get("text_changes", []):
+        print(f"  ✎  {sid} on-screen text “{old}” → “{new}”  (it did not match what is said; from the {src})")
     print(f"\n  📄  {report}")
     if questions and not args.accept:
         print("\n  ❔  I need your answer before rendering:")
